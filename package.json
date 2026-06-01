@@ -1,0 +1,28 @@
+{
+  "name": "ai-secretary-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI secretary portfolio project",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace @ai-secretary/api\" \"npm run dev --workspace @ai-secretary/web\"",
+    "build": "npm run build --workspace @ai-secretary/api && npm run build --workspace @ai-secretary/web",
+    "start": "npm run start --workspace @ai-secretary/api",
+    "lint": "npm run lint --workspace @ai-secretary/api && npm run lint --workspace @ai-secretary/web",
+    "db:migrate": "npm run db:migrate --workspace @ai-secretary/api",
+    "db:reset": "npm run db:reset --workspace @ai-secretary/api",
+    "db:seed": "npm run db:seed --workspace @ai-secretary/api",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f --tail=100",
+    "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d",
+    "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
+    "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f --tail=100"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

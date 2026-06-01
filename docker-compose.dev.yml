@@ -1,0 +1,89 @@
+name: ai-secretary-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ai-secretary-dev-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_secretary
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pg_data_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_secretary"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "15432:5432"
+
+  api:
+    image: node:20-alpine
+    container_name: ai-secretary-dev-api
+    working_dir: /app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/ai_secretary?schema=public
+      JWT_SECRET: change-me-in-development-secret
+      CORS_ORIGIN: http://localhost:5173
+    volumes:
+      - ./:/app
+      - node_modules_dev:/app/node_modules
+      - api_node_modules_dev:/app/apps/api/node_modules
+      - web_node_modules_dev:/app/apps/web/node_modules
+    command: >
+      sh -c "npm install &&
+      npm run db:generate --workspace @ai-secretary/api &&
+      npm run db:deploy --workspace @ai-secretary/api &&
+      npm run db:seed --workspace @ai-secretary/api &&
+      npm run dev --workspace @ai-secretary/api"
+    ports:
+      - "14000:4000"
+
+  web:
+    image: node:20-alpine
+    container_name: ai-secretary-dev-web
+    working_dir: /app
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: http://localhost:14000
+    volumes:
+      - ./:/app
+      - node_modules_dev:/app/node_modules
+      - api_node_modules_dev:/app/apps/api/node_modules
+      - web_node_modules_dev:/app/apps/web/node_modules
+    command: >
+      sh -c "npm install &&
+      npm run dev --workspace @ai-secretary/web -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: ai-secretary-dev-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin_data_dev:/var/lib/pgadmin
+    ports:
+      - "15050:80"
+
+volumes:
+  pg_data_dev:
+  pgadmin_data_dev:
+  node_modules_dev:
+  api_node_modules_dev:
+  web_node_modules_dev:

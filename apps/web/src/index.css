@@ -1,0 +1,275 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+
+:root {
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: #202125;
+  background: linear-gradient(160deg, #f7f7f2 0%, #fffaf3 54%, #eefbf5 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --line: #d8ddd7;
+  --ink: #1f2226;
+  --subtle: #5c6370;
+  --panel: rgba(255, 255, 255, 0.92);
+  --brand: #0a8b6c;
+  --brand-strong: #05614d;
+  --warn: #d06222;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2 {
+  margin: 0;
+  line-height: 1.2;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+
+h1 {
+  font-size: clamp(1.6rem, 1.4rem + 1vw, 2.4rem);
+  font-weight: 800;
+}
+
+h2 {
+  font-size: clamp(1.1rem, 1rem + 0.6vw, 1.4rem);
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  width: min(1120px, 100% - 2rem);
+  margin: 0 auto;
+  padding: 2rem 0 2.5rem;
+}
+
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+
+.auth-panel,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 20px 40px rgba(40, 42, 45, 0.08);
+}
+
+.auth-panel {
+  width: min(560px, 100%);
+  padding: 1.4rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.auth-header {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.eyebrow {
+  font-size: 0.78rem;
+  letter-spacing: 0.06rem;
+  text-transform: uppercase;
+  color: var(--brand-strong);
+  font-weight: 700;
+}
+
+.subtitle {
+  color: var(--subtle);
+  max-width: 70ch;
+}
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.mode-toggle button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  min-height: 2.5rem;
+  font-weight: 600;
+  color: #33404d;
+  cursor: pointer;
+}
+
+.mode-toggle button.active {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+  background: #eaf9f4;
+}
+
+.auth-form,
+.form-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+  color: #313840;
+}
+
+input,
+textarea,
+select {
+  border: 1px solid #c8cfd6;
+  border-radius: 6px;
+  padding: 0.62rem 0.72rem;
+  min-height: 2.5rem;
+  background: #ffffff;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 7.5rem;
+}
+
+button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  min-height: 2.6rem;
+  padding: 0 0.95rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--brand);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.outline-btn {
+  background: #fff;
+  color: #2d3844;
+  border-color: #c8cfd6;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dashboard-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.grid-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.panel {
+  padding: 1rem;
+}
+
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.logs-list {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.log-item {
+  border: 1px solid #d6dce2;
+  border-radius: 6px;
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.4rem;
+  background: #fff;
+}
+
+.log-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.status {
+  border-radius: 999px;
+  padding: 0.16rem 0.58rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.status.success {
+  background: #ddf4e4;
+  color: #0a7244;
+}
+
+.status.escalated {
+  background: #ffe9db;
+  color: var(--warn);
+}
+
+.status.missed {
+  background: #f3ece3;
+  color: #8a5f31;
+}
+
+.meta,
+.empty-state,
+.loading-state {
+  color: var(--subtle);
+  font-size: 0.92rem;
+}
+
+.error-text {
+  color: #b23d16;
+  font-size: 0.92rem;
+}
+
+.loading-state {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 1.3rem;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+@media (min-width: 980px) {
+  .grid-layout {
+    grid-template-columns: 1.2fr 1fr;
+  }
+}

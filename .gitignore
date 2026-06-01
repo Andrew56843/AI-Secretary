@@ -1,0 +1,13 @@
+node_modules
+apps/*/node_modules
+apps/*/dist
+.env
+apps/api/.env
+.DS_Store
+.idea
+
+# Local snapshots from the telephony test stand.
+server.remote.js
+remote-*.json
+remote-*.conf
+scripts/

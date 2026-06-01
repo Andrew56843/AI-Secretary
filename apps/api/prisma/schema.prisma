@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String             @id @default(cuid())
+  email     String             @unique
+  fullName  String?
+  password  String
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  profiles  AssistantProfile[]
+}
+
+model ReservedPhoneNumber {
+  id        String             @id @default(cuid())
+  number    String             @unique
+  assigned  Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  profiles  AssistantProfile[]
+}
+
+model AssistantProfile {
+  id               String              @id @default(cuid())
+  userId           String
+  title            String              @default("My AI Secretary")
+  businessName     String?
+  prompt           String
+  forwardingPhone  String
+  status           ProfileStatus       @default(ACTIVE)
+  reservedNumberId String
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reservedNumber   ReservedPhoneNumber @relation(fields: [reservedNumberId], references: [id])
+  callLogs         CallLog[]
+
+  @@index([userId])
+  @@index([reservedNumberId])
+}
+
+model CallLog {
+  id               String           @id @default(cuid())
+  assistantProfileId String
+  customerPhone    String
+  status           CallStatus
+  durationSeconds  Int              @default(0)
+  transcript       String?
+  summary          String?
+  recordingUrl     String?
+  createdAt        DateTime         @default(now())
+
+  assistantProfile AssistantProfile @relation(fields: [assistantProfileId], references: [id], onDelete: Cascade)
+
+  @@index([assistantProfileId, createdAt])
+}
+
+enum ProfileStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum CallStatus {
+  SUCCESS
+  ESCALATED
+  MISSED
+}
