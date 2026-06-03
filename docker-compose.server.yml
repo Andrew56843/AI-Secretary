@@ -50,3 +50,5 @@ services:
 
 volumes:
   pg_data:
+    external: true
+    name: ai-secretary-saas_pg_data
