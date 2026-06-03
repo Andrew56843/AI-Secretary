@@ -3,7 +3,12 @@ import express from "express";
 import { env } from "./config.js";
 import { prisma } from "./lib/prisma.js";
 import { authRouter } from "./routes/auth.js";
+import { billingRouter } from "./routes/billing.js";
 import { callLogsRouter } from "./routes/call-logs.js";
+import { callsRouter } from "./routes/calls.js";
+import { contactNamesRouter } from "./routes/contact-names.js";
+import { integrationsRouter } from "./routes/integrations.js";
+import { outboundRouter } from "./routes/outbound.js";
 import { profilesRouter } from "./routes/profiles.js";
 
 const app = express();
@@ -22,8 +27,13 @@ app.get("/healthz", async (_req, res) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/billing", billingRouter);
+app.use("/api/calls", callsRouter);
+app.use("/api/contact-names", contactNamesRouter);
+app.use("/api/integrations", integrationsRouter);
 app.use("/api/profiles", profilesRouter);
 app.use("/api/call-logs", callLogsRouter);
+app.use("/api/outbound", outboundRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ message: "Not found" });

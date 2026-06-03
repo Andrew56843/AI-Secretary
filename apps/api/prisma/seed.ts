@@ -1,5 +1,5 @@
-import { CallStatus, PrismaClient } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import { CallDirection, CallStatus, OutboundContactStatus, PrismaClient } from "@prisma/client";
+import * as bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
@@ -12,50 +12,14 @@ const STARTING_POOL = [
   "+74950010006"
 ];
 
-const DEMO_EMAIL = "demo@ai-secretary.local";
-const DEMO_PASSWORD = "demo-password";
+const DEMO_PHONE = "+79054176285";
+const DEMO_PASSWORD = "123456";
 
-const DEMO_CALLS = [
-  {
-    customerPhone: "+79054176285",
-    status: CallStatus.SUCCESS,
-    durationSeconds: 184,
-    summary: "Client ordered pickup: three durum doners, fries, and cola.",
-    transcript:
-      "Assistant: Hello, Echte Doner. Delivery or pickup?\nUser: Pickup from Kulakova. I need three sets: doner, fries, and cola.\nAssistant: Accepted. Pickup from Kulakova, 29D.",
-    recordingUrl: "https://example.com/recordings/demo-success.mp3",
-    minutesAgo: 35
-  },
-  {
-    customerPhone: "+79031234567",
-    status: CallStatus.ESCALATED,
-    durationSeconds: 96,
-    summary: "Client asked for a non-standard catering order, assistant escalated to owner.",
-    transcript:
-      "Assistant: I can help with regular orders.\nUser: We need catering for 40 people tomorrow.\nAssistant: I will transfer you to the owner to confirm details.",
-    recordingUrl: "https://example.com/recordings/demo-escalated.mp3",
-    minutesAgo: 180
-  },
-  {
-    customerPhone: "+79261230044",
-    status: CallStatus.MISSED,
-    durationSeconds: 12,
-    summary: "Call ended before the customer selected delivery or pickup.",
-    transcript: "Assistant: Hello, Echte Doner. Delivery or pickup?\nUser: Hello?\nCall ended.",
-    recordingUrl: "https://example.com/recordings/demo-missed.mp3",
-    minutesAgo: 420
-  },
-  {
-    customerPhone: "+79160001122",
-    status: CallStatus.SUCCESS,
-    durationSeconds: 244,
-    summary: "Delivery order accepted; assistant requested address and confirmed total.",
-    transcript:
-      "Assistant: What would you like to order?\nUser: Two doners and a mors.\nAssistant: Total is confirmed. Please tell me the delivery address.",
-    recordingUrl: "https://example.com/recordings/demo-delivery.mp3",
-    minutesAgo: 980
-  }
-];
+const INBOUND_PROMPT =
+  "Ты ИИ-секретарь ресторана Echte Doner. Принимай входящие звонки, уточняй доставку или самовывоз, помогай выбрать позиции из меню, подтверждай заказ и переводь звонок владельцу, если клиент просит нестандартное решение.";
+
+const OUTBOUND_PROMPT =
+  "Ты ИИ-ассистент для исходящего обзвона клиентов Echte Doner. Вежливо представляйся, уточняй интерес к повторному заказу, фиксируй результат разговора и не затягивай диалог.";
 
 async function main() {
   for (const number of STARTING_POOL) {
@@ -69,67 +33,183 @@ async function main() {
   const password = await bcrypt.hash(DEMO_PASSWORD, 12);
 
   const user = await prisma.user.upsert({
-    where: { email: DEMO_EMAIL },
+    where: { phone: DEMO_PHONE },
     update: {
-      fullName: "Demo Founder",
-      password
+      fullName: "Андрей",
+      password,
+      rubleBalance: 45,
+      minuteBalanceSeconds: 300,
+      totalPurchasedSeconds: 0,
+      numberPurchasedAt: null
     },
     create: {
-      email: DEMO_EMAIL,
-      fullName: "Demo Founder",
-      password
+      phone: DEMO_PHONE,
+      fullName: "Андрей",
+      password,
+      rubleBalance: 45,
+      minuteBalanceSeconds: 300,
+      totalPurchasedSeconds: 0
     }
   });
 
-  const reservedNumber = await prisma.reservedPhoneNumber.upsert({
-    where: { number: STARTING_POOL[0]! },
-    update: { assigned: true },
-    create: {
-      number: STARTING_POOL[0]!,
-      assigned: true
-    }
+  const existingInbound = await prisma.assistantProfile.findUnique({
+    where: { userId_mode: { userId: user.id, mode: CallDirection.INBOUND } }
   });
 
-  const profile = await prisma.assistantProfile.upsert({
-    where: { id: "demo-assistant-profile" },
+  if (existingInbound?.reservedNumberId) {
+    await prisma.reservedPhoneNumber.update({
+      where: { id: existingInbound.reservedNumberId },
+      data: { assigned: false }
+    });
+  }
+
+  const inboundProfile = await prisma.assistantProfile.upsert({
+    where: { userId_mode: { userId: user.id, mode: CallDirection.INBOUND } },
     update: {
-      userId: user.id,
-      title: "Echte Doner AI Secretary",
+      title: "Входящие звонки Echte Doner",
       businessName: "Echte Doner",
-      prompt:
-        "You are an AI phone secretary for Echte Doner. Accept delivery and pickup orders, clarify menu items, confirm totals, and escalate to the owner when the request is outside the normal flow.",
-      forwardingPhone: "+79054176285",
-      reservedNumberId: reservedNumber.id,
+      prompt: INBOUND_PROMPT,
+      greetingText: "Здравствуйте! Я ИИ-оператор ресторана Echte Doner. Доставка или самовывоз?",
+      forwardingPhone: user.phone,
+      forwardingEnabled: true,
+      maxDialogSeconds: 120,
+      reservedNumberId: null,
       status: "ACTIVE"
     },
     create: {
-      id: "demo-assistant-profile",
       userId: user.id,
-      title: "Echte Doner AI Secretary",
+      mode: CallDirection.INBOUND,
+      title: "Входящие звонки Echte Doner",
       businessName: "Echte Doner",
-      prompt:
-        "You are an AI phone secretary for Echte Doner. Accept delivery and pickup orders, clarify menu items, confirm totals, and escalate to the owner when the request is outside the normal flow.",
-      forwardingPhone: "+79054176285",
-      reservedNumberId: reservedNumber.id,
+      prompt: INBOUND_PROMPT,
+      greetingText: "Здравствуйте! Я ИИ-оператор ресторана Echte Doner. Доставка или самовывоз?",
+      forwardingPhone: user.phone,
+      forwardingEnabled: true,
+      maxDialogSeconds: 120,
+      status: "ACTIVE"
+    }
+  });
+
+  const outboundProfile = await prisma.assistantProfile.upsert({
+    where: { userId_mode: { userId: user.id, mode: CallDirection.OUTBOUND } },
+    update: {
+      title: "Исходящие звонки Echte Doner",
+      businessName: "Echte Doner",
+      prompt: OUTBOUND_PROMPT,
+      greetingText: "Здравствуйте! Это Echte Doner, можно задать один короткий вопрос?",
+      forwardingPhone: user.phone,
+      forwardingEnabled: true,
+      maxDialogSeconds: 90,
+      reservedNumberId: null,
+      status: "ACTIVE"
+    },
+    create: {
+      userId: user.id,
+      mode: CallDirection.OUTBOUND,
+      title: "Исходящие звонки Echte Doner",
+      businessName: "Echte Doner",
+      prompt: OUTBOUND_PROMPT,
+      greetingText: "Здравствуйте! Это Echte Doner, можно задать один короткий вопрос?",
+      forwardingPhone: user.phone,
+      forwardingEnabled: true,
+      maxDialogSeconds: 90,
       status: "ACTIVE"
     }
   });
 
   await prisma.callLog.deleteMany({
-    where: { assistantProfileId: profile.id }
+    where: { assistantProfileId: { in: [inboundProfile.id, outboundProfile.id] } }
+  });
+
+  await prisma.outboundContact.deleteMany({ where: { userId: user.id } });
+  await prisma.billingTransaction.deleteMany({ where: { userId: user.id } });
+
+  await prisma.googleAccount.upsert({
+    where: { userId: user.id },
+    update: {
+      status: "DISCONNECTED",
+      googleEmail: null,
+      calendarId: null,
+      connectedAt: null
+    },
+    create: {
+      userId: user.id,
+      status: "DISCONNECTED"
+    }
+  });
+
+  await prisma.telegramAccount.upsert({
+    where: { userId: user.id },
+    update: {
+      status: "DISCONNECTED",
+      username: null,
+      chatId: null,
+      connectedAt: null
+    },
+    create: {
+      userId: user.id,
+      linkToken: "demo-telegram-link-token",
+      status: "DISCONNECTED"
+    }
+  });
+
+  await prisma.billingTransaction.create({
+    data: {
+      userId: user.id,
+      type: "FREE_GRANT",
+      amountSeconds: 300,
+      note: "Registration free minutes"
+    }
   });
 
   await prisma.callLog.createMany({
-    data: DEMO_CALLS.map((call) => ({
-      assistantProfileId: profile.id,
-      customerPhone: call.customerPhone,
-      status: call.status,
-      durationSeconds: call.durationSeconds,
-      summary: call.summary,
-      transcript: call.transcript,
-      recordingUrl: call.recordingUrl,
-      createdAt: new Date(Date.now() - call.minutesAgo * 60 * 1000)
-    }))
+    data: [
+      {
+        assistantProfileId: inboundProfile.id,
+        direction: CallDirection.INBOUND,
+        customerPhone: "+79054176285",
+        status: CallStatus.SUCCESS,
+        durationSeconds: 184,
+        summary: "Клиент оформил самовывоз: три дюрюма, картофель фри и кола.",
+        transcript:
+          "Assi: Здравствуйте! Доставка или самовывоз?\nUser: Самовывоз с Кулакова.\nAssi: Принял заказ и подтвердил сумму.",
+        recordingUrl: "https://example.com/recordings/inbound-success.mp3",
+        createdAt: new Date(Date.now() - 35 * 60 * 1000)
+      },
+      {
+        assistantProfileId: inboundProfile.id,
+        direction: CallDirection.INBOUND,
+        customerPhone: "+79031234567",
+        status: CallStatus.ESCALATED,
+        durationSeconds: 96,
+        summary: "Клиент попросил нестандартный кейтеринг, звонок переведен владельцу.",
+        transcript:
+          "Assi: Я могу помочь с обычным заказом.\nUser: Нужно на 40 человек завтра.\nAssi: Передаю владельцу для уточнения деталей.",
+        recordingUrl: "https://example.com/recordings/inbound-escalated.mp3",
+        createdAt: new Date(Date.now() - 180 * 60 * 1000)
+      },
+      {
+        assistantProfileId: outboundProfile.id,
+        direction: CallDirection.OUTBOUND,
+        customerPhone: "+79261230044",
+        status: CallStatus.SUCCESS,
+        durationSeconds: 72,
+        summary: "Клиент заинтересовался повторным заказом на вечер.",
+        transcript:
+          "Assi: Здравствуйте! Это Echte Doner, удобно говорить?\nUser: Да.\nAssi: Зафиксировал интерес к повторному заказу.",
+        recordingUrl: "https://example.com/recordings/outbound-success.mp3",
+        createdAt: new Date(Date.now() - 420 * 60 * 1000)
+      }
+    ]
+  });
+
+  await prisma.outboundContact.createMany({
+    data: [
+      { userId: user.id, phone: "+79261230044", status: OutboundContactStatus.CALLED, attempts: 1 },
+      { userId: user.id, phone: "+79160001122", status: OutboundContactStatus.PENDING },
+      { userId: user.id, phone: "+79031234567", status: OutboundContactStatus.PENDING }
+    ],
+    skipDuplicates: true
   });
 }
 

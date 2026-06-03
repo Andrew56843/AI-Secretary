@@ -1,12 +1,18 @@
 export type AuthUser = {
   id: string;
-  email: string;
+  phone: string;
   fullName?: string | null;
+  createdAt?: string;
 };
 
 export type AuthResponse = {
   token: string;
   user: AuthUser;
+  issuedPassword?: string;
+  delivery?: {
+    channel: "sms_stub";
+    message: string;
+  };
 };
 
 export type ReservedPhoneNumber = {
@@ -17,20 +23,30 @@ export type ReservedPhoneNumber = {
 
 export type AssistantProfile = {
   id: string;
+  mode: "INBOUND" | "OUTBOUND";
   title: string;
   businessName?: string | null;
   prompt: string;
+  greetingText: string;
   forwardingPhone: string;
+  forwardingEnabled: boolean;
+  maxDialogSeconds: number;
   status: "ACTIVE" | "PAUSED";
-  reservedNumberId: string;
-  reservedNumber: ReservedPhoneNumber;
+  reservedNumberId?: string | null;
+  reservedNumber?: ReservedPhoneNumber | null;
   _count?: {
     callLogs: number;
   };
 };
 
+export type ProfilesByMode = {
+  inbound: AssistantProfile | null;
+  outbound: AssistantProfile | null;
+};
+
 export type CallLog = {
   id: string;
+  direction: "INBOUND" | "OUTBOUND";
   customerPhone: string;
   status: "SUCCESS" | "ESCALATED" | "MISSED";
   durationSeconds: number;
@@ -38,4 +54,92 @@ export type CallLog = {
   transcript?: string | null;
   recordingUrl?: string | null;
   createdAt: string;
+  transcriptDeliveries?: TranscriptDelivery[];
 };
+
+export type TranscriptDelivery = {
+  id: string;
+  channel: "TELEGRAM";
+  status: "PENDING" | "SENT" | "FAILED";
+  target?: string | null;
+  payloadPreview?: string | null;
+  createdAt: string;
+};
+
+export type PhoneContactName = {
+  id: string;
+  phone: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OutboundContact = {
+  id: string;
+  phone: string;
+  status: "PENDING" | "CALLED" | "FAILED";
+  queuedForCall: boolean;
+  attempts: number;
+  lastCallLogId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OutboundStats = {
+  total: number;
+  pending: number;
+  queued: number;
+  called: number;
+  failed: number;
+};
+
+export type OutboundPagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+};
+
+export type BillingTransaction = {
+  id: string;
+  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE";
+  amountSeconds: number;
+  amountRub?: number | null;
+  note?: string | null;
+  createdAt: string;
+};
+
+export type BillingState = {
+  rubleBalance: number;
+  minuteBalanceSeconds: number;
+  totalPurchasedSeconds: number;
+  numberPurchasedAt?: string | null;
+  reservedNumber?: ReservedPhoneNumber | null;
+  transactions: BillingTransaction[];
+};
+
+export type GoogleIntegration = {
+  status: "DISCONNECTED" | "CONNECTED";
+  googleEmail?: string | null;
+  calendarId?: string | null;
+  connectedAt?: string | null;
+};
+
+export type TelegramIntegration = {
+  status: "DISCONNECTED" | "CONNECTED";
+  botUsername: string;
+  linkToken: string;
+  botLink: string;
+  chatId?: string | null;
+  username?: string | null;
+  connectedAt?: string | null;
+};
+
+export type IntegrationsState = {
+  google: GoogleIntegration;
+  telegram: TelegramIntegration;
+};
+
+export type UiMode = "inbound" | "outbound";

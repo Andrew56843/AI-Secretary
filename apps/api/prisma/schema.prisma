@@ -8,13 +8,23 @@ datasource db {
 }
 
 model User {
-  id        String             @id @default(cuid())
-  email     String             @unique
-  fullName  String?
-  password  String
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
-  profiles  AssistantProfile[]
+  id                    String               @id @default(cuid())
+  phone                 String               @unique
+  fullName              String?
+  password              String
+  rubleBalance          Int                  @default(0)
+  minuteBalanceSeconds  Int                  @default(300)
+  totalPurchasedSeconds Int                  @default(0)
+  numberPurchasedAt     DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  profiles              AssistantProfile[]
+  outboundContacts      OutboundContact[]
+  billingTransactions   BillingTransaction[]
+  googleAccount         GoogleAccount?
+  telegramAccount       TelegramAccount?
+  transcriptDeliveries  TranscriptDelivery[]
+  phoneContactNames     PhoneContactName[]
 }
 
 model ReservedPhoneNumber {
@@ -29,19 +39,24 @@ model ReservedPhoneNumber {
 model AssistantProfile {
   id               String              @id @default(cuid())
   userId           String
+  mode             CallDirection
   title            String              @default("My AI Secretary")
   businessName     String?
   prompt           String
+  greetingText     String
   forwardingPhone  String
+  forwardingEnabled Boolean            @default(true)
+  maxDialogSeconds Int                 @default(120)
   status           ProfileStatus       @default(ACTIVE)
-  reservedNumberId String
+  reservedNumberId String?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
   user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reservedNumber   ReservedPhoneNumber @relation(fields: [reservedNumberId], references: [id])
+  reservedNumber   ReservedPhoneNumber? @relation(fields: [reservedNumberId], references: [id])
   callLogs         CallLog[]
 
+  @@unique([userId, mode])
   @@index([userId])
   @@index([reservedNumberId])
 }
@@ -49,6 +64,7 @@ model AssistantProfile {
 model CallLog {
   id               String           @id @default(cuid())
   assistantProfileId String
+  direction        CallDirection
   customerPhone    String
   status           CallStatus
   durationSeconds  Int              @default(0)
@@ -58,8 +74,100 @@ model CallLog {
   createdAt        DateTime         @default(now())
 
   assistantProfile AssistantProfile @relation(fields: [assistantProfileId], references: [id], onDelete: Cascade)
+  transcriptDeliveries TranscriptDelivery[]
 
   @@index([assistantProfileId, createdAt])
+  @@index([direction, createdAt])
+}
+
+model OutboundContact {
+  id        String                @id @default(cuid())
+  userId    String
+  phone     String
+  status    OutboundContactStatus @default(PENDING)
+  queuedForCall Boolean             @default(false)
+  attempts  Int                   @default(0)
+  lastCallLogId String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, phone])
+  @@index([userId, status])
+}
+
+model BillingTransaction {
+  id            String                 @id @default(cuid())
+  userId        String
+  type          BillingTransactionType
+  amountSeconds Int
+  amountRub     Int?
+  note          String?
+  createdAt     DateTime               @default(now())
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model GoogleAccount {
+  id          String            @id @default(cuid())
+  userId      String            @unique
+  status      IntegrationStatus @default(DISCONNECTED)
+  googleEmail String?
+  calendarId  String?
+  connectedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TelegramAccount {
+  id          String            @id @default(cuid())
+  userId      String            @unique
+  status      IntegrationStatus @default(DISCONNECTED)
+  botUsername String            @default("AISecretaryDemoBot")
+  linkToken   String            @unique
+  chatId      String?
+  username    String?
+  connectedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TranscriptDelivery {
+  id             String                   @id @default(cuid())
+  userId         String
+  callLogId      String
+  channel        TranscriptChannel
+  status         TranscriptDeliveryStatus @default(PENDING)
+  target         String?
+  payloadPreview String?
+  createdAt      DateTime                 @default(now())
+
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  callLog        CallLog                  @relation(fields: [callLogId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([callLogId])
+}
+
+model PhoneContactName {
+  id        String   @id @default(cuid())
+  userId    String
+  phone     String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, phone])
+  @@index([userId])
 }
 
 enum ProfileStatus {
@@ -71,4 +179,36 @@ enum CallStatus {
   SUCCESS
   ESCALATED
   MISSED
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum OutboundContactStatus {
+  PENDING
+  CALLED
+  FAILED
+}
+
+enum BillingTransactionType {
+  FREE_GRANT
+  TOP_UP
+  NUMBER_PURCHASE
+}
+
+enum IntegrationStatus {
+  DISCONNECTED
+  CONNECTED
+}
+
+enum TranscriptChannel {
+  TELEGRAM
+}
+
+enum TranscriptDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
 }

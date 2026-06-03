@@ -1,10 +1,10 @@
-import bcrypt from "bcryptjs";
+import * as bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { env } from "../config.js";
 
 type TokenPayload = {
   userId: string;
-  email: string;
+  phone: string;
 };
 
 export async function hashPassword(password: string) {

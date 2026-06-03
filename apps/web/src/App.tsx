@@ -6,8 +6,22 @@ import { DashboardPage } from "./pages/DashboardPage";
 import type { AuthResponse, AuthUser } from "./types";
 
 export default function App() {
-  const [token, setTokenState] = useState<string | null>(() => getToken());
-  const [user, setUserState] = useState<AuthUser | null>(() => getUser<AuthUser>());
+  const [token, setTokenState] = useState<string | null>(() => {
+    const storedUser = getUser<AuthUser>();
+    if (!storedUser?.phone) {
+      clearToken();
+      clearUser();
+      return null;
+    }
+    return getToken();
+  });
+  const [user, setUserState] = useState<AuthUser | null>(() => {
+    const storedUser = getUser<AuthUser>();
+    if (!storedUser?.phone) {
+      return null;
+    }
+    return storedUser;
+  });
 
   function handleAuthorized(payload: AuthResponse) {
     setToken(payload.token);
