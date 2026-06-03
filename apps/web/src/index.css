@@ -364,6 +364,8 @@ label {
 }
 
 .landing-copy {
+  position: relative;
+  z-index: 2;
   width: min(620px, 100%);
   margin-top: clamp(5rem, 14vh, 8.5rem);
   display: grid;
@@ -402,6 +404,8 @@ label {
 }
 
 .landing-actions {
+  position: relative;
+  z-index: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
@@ -454,6 +458,19 @@ label {
   background: #f7faf7;
   color: var(--brand-strong);
   transform: translateY(-1px);
+}
+
+.landing-actions .ghost-link {
+  background: #ffffff;
+  border-color: #cfd8d2;
+  color: #334155;
+  box-shadow: 0 12px 28px rgba(40, 42, 45, 0.11);
+}
+
+.landing-actions .ghost-link:hover {
+  background: #f8fbf8;
+  border-color: var(--brand);
+  color: var(--brand-strong);
 }
 
 .scene-phone,
@@ -1199,6 +1216,8 @@ label {
   color: var(--brand-strong);
   font-size: 0.78rem;
   font-weight: 750;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .panel-title-actions {
@@ -1216,6 +1235,8 @@ label {
   color: var(--brand-strong);
   font-size: 0.78rem;
   font-weight: 750;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .two-columns,
@@ -2218,10 +2239,14 @@ label {
     flex-wrap: wrap;
   }
 
+  .integration-card .panel-title {
+    flex-wrap: nowrap;
+  }
+
   .logs-header h2,
   .panel-title h2 {
-    flex: 1 1 auto;
-    min-width: min(100%, 12rem);
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   .panel-title-actions {
