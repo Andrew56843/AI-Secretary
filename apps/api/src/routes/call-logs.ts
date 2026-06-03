@@ -18,6 +18,12 @@ const directionQuerySchema = z
     return value === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND;
   });
 
+const logsQuerySchema = z.object({
+  direction: directionQuerySchema,
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(6)
+});
+
 const createMockSchema = z.object({
   direction: z.enum(["inbound", "outbound"]).default("inbound"),
   customerPhone: z.string().trim().min(8).max(24).transform(normalizePhone),
@@ -28,36 +34,56 @@ const createMockSchema = z.object({
   recordingUrl: z.string().url().optional()
 });
 
+function createPagination(page: number, pageSize: number, total: number) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+
+  return {
+    page: normalizedPage,
+    pageSize,
+    total,
+    totalPages,
+    hasPreviousPage: normalizedPage > 1,
+    hasNextPage: normalizedPage < totalPages
+  };
+}
+
 callLogsRouter.get("/me", requireAuth, async (req, res) => {
-  const parsedDirection = directionQuerySchema.safeParse(req.query.direction);
-  if (!parsedDirection.success) {
-    res.status(400).json({ message: "Invalid direction" });
+  const parsed = logsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid query", errors: parsed.error.flatten() });
     return;
   }
+
+  const { direction, pageSize } = parsed.data;
 
   const profiles = await prisma.assistantProfile.findMany({
     where: {
       userId: req.user!.userId,
-      ...(parsedDirection.data ? { mode: parsedDirection.data } : {})
+      ...(direction ? { mode: direction } : {})
     },
     select: { id: true }
   });
 
   if (profiles.length === 0) {
-    res.json({ logs: [] });
+    res.json({ logs: [], pagination: createPagination(1, pageSize, 0) });
     return;
   }
 
+  const where: Prisma.CallLogWhereInput = {
+    assistantProfileId: { in: profiles.map((profile) => profile.id) }
+  };
+  const total = await prisma.callLog.count({ where });
+  const pagination = createPagination(parsed.data.page, pageSize, total);
   const logs = await prisma.callLog.findMany({
-    where: {
-      assistantProfileId: { in: profiles.map((profile) => profile.id) }
-    },
+    where,
     include: { transcriptDeliveries: true },
     orderBy: { createdAt: "desc" },
-    take: 50
+    skip: (pagination.page - 1) * pageSize,
+    take: pageSize
   });
 
-  res.json({ logs });
+  res.json({ logs, pagination });
 });
 
 callLogsRouter.post("/mock", requireAuth, async (req, res) => {
@@ -95,6 +121,10 @@ callLogsRouter.post("/mock", requireAuth, async (req, res) => {
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_MINUTES") {
       res.status(402).json({ message: "Not enough minutes. Top up balance to continue calls." });
+      return;
+    }
+    if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
+      res.status(402).json({ message: "Not enough balance. Top up balance to continue calls." });
       return;
     }
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {

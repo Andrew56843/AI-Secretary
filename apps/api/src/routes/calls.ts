@@ -44,6 +44,10 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
       res.status(402).json({ message: "Not enough minutes. Top up balance to continue calls." });
       return;
     }
+    if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
+      res.status(402).json({ message: "Not enough balance. Top up balance to continue calls." });
+      return;
+    }
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
       res.status(404).json({ message: "Create assistant profile first" });
       return;

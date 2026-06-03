@@ -8,6 +8,8 @@ import { requireAuth } from "../middleware/require-auth.js";
 
 const outboundRouter = Router();
 
+const OUTBOUND_RETRY_INTERVAL_MINUTES = 15;
+
 const importContactsSchema = z.object({
   rawNumbers: z.string().trim().min(3).max(20000)
 });
@@ -21,9 +23,43 @@ const contactParamsSchema = z.object({
   id: z.string().cuid()
 });
 
-const queueContactSchema = z.object({
-  queuedForCall: z.boolean()
-});
+function getNextAttemptAt() {
+  return new Date(Date.now() + OUTBOUND_RETRY_INTERVAL_MINUTES * 60 * 1000);
+}
+
+async function finishOutboundAttempt(
+  tx: Prisma.TransactionClient,
+  contact: { id: string; attempts: number },
+  result: "success" | "failed",
+  lastCallLogId?: string
+) {
+  if (result === "success") {
+    await tx.outboundContact.delete({
+      where: { id: contact.id }
+    });
+    return { removed: true, attempts: contact.attempts + 1 };
+  }
+
+  const attempts = contact.attempts + 1;
+  if (attempts >= 3) {
+    await tx.outboundContact.delete({
+      where: { id: contact.id }
+    });
+    return { removed: true, attempts };
+  }
+
+  const updated = await tx.outboundContact.update({
+    where: { id: contact.id },
+    data: {
+      status: OutboundContactStatus.PENDING,
+      attempts,
+      nextAttemptAt: getNextAttemptAt(),
+      ...(lastCallLogId ? { lastCallLogId } : {})
+    }
+  });
+
+  return { removed: false, attempts: updated.attempts };
+}
 
 outboundRouter.get("/contacts", requireAuth, async (req, res) => {
   const parsed = contactsQuerySchema.safeParse(req.query);
@@ -35,12 +71,9 @@ outboundRouter.get("/contacts", requireAuth, async (req, res) => {
   const where: Prisma.OutboundContactWhereInput = { userId: req.user!.userId };
   const { pageSize } = parsed.data;
 
-  const [total, pending, queued, called, failed] = await Promise.all([
+  const [total, pending] = await Promise.all([
     prisma.outboundContact.count({ where }),
-    prisma.outboundContact.count({ where: { ...where, status: OutboundContactStatus.PENDING } }),
-    prisma.outboundContact.count({ where: { ...where, queuedForCall: true } }),
-    prisma.outboundContact.count({ where: { ...where, status: OutboundContactStatus.CALLED } }),
-    prisma.outboundContact.count({ where: { ...where, status: OutboundContactStatus.FAILED } })
+    prisma.outboundContact.count({ where: { ...where, status: OutboundContactStatus.PENDING } })
   ]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -55,10 +88,7 @@ outboundRouter.get("/contacts", requireAuth, async (req, res) => {
 
   const stats = {
     total,
-    pending,
-    queued,
-    called,
-    failed
+    pending
   };
 
   res.json({
@@ -108,16 +138,10 @@ outboundRouter.post("/contacts/import", requireAuth, async (req, res) => {
   });
 });
 
-outboundRouter.put("/contacts/:id/queue", requireAuth, async (req, res) => {
+outboundRouter.delete("/contacts/:id", requireAuth, async (req, res) => {
   const parsedParams = contactParamsSchema.safeParse(req.params);
   if (!parsedParams.success) {
     res.status(400).json({ message: "Invalid contact id" });
-    return;
-  }
-
-  const parsed = queueContactSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
     return;
   }
 
@@ -133,15 +157,11 @@ outboundRouter.put("/contacts/:id/queue", requireAuth, async (req, res) => {
     return;
   }
 
-  const updated = await prisma.outboundContact.update({
-    where: { id: contact.id },
-    data: {
-      queuedForCall: parsed.data.queuedForCall,
-      ...(parsed.data.queuedForCall ? { status: OutboundContactStatus.PENDING } : {})
-    }
+  await prisma.outboundContact.delete({
+    where: { id: contact.id }
   });
 
-  res.json({ contact: updated });
+  res.status(204).send();
 });
 
 outboundRouter.post("/contacts/:id/mock-call", requireAuth, async (req, res) => {
@@ -188,17 +208,9 @@ outboundRouter.post("/contacts/:id/mock-call", requireAuth, async (req, res) => 
           recordingUrl: "https://example.com/calls/outbound-demo.mp3"
         });
 
-        const updated = await tx.outboundContact.update({
-          where: { id: contact.id },
-          data: {
-            status: OutboundContactStatus.CALLED,
-            queuedForCall: false,
-            attempts: { increment: 1 },
-            lastCallLogId: log.id
-          }
-        });
+        await finishOutboundAttempt(tx, contact, "success", log.id);
 
-        return { contact: updated, log };
+        return { removedContactId: contact.id, log };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
     );
@@ -207,6 +219,10 @@ outboundRouter.post("/contacts/:id/mock-call", requireAuth, async (req, res) => 
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_MINUTES") {
       res.status(402).json({ message: "Not enough minutes. Top up balance to continue calls." });
+      return;
+    }
+    if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
+      res.status(402).json({ message: "Not enough balance. Top up balance to continue calls." });
       return;
     }
     if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {

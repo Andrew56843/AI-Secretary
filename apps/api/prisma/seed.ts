@@ -1,4 +1,4 @@
-import { CallDirection, CallStatus, OutboundContactStatus, PrismaClient } from "@prisma/client";
+import { BillingTransactionType, CallDirection, CallStatus, PrismaClient } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -40,7 +40,8 @@ async function main() {
       rubleBalance: 45,
       minuteBalanceSeconds: 300,
       totalPurchasedSeconds: 0,
-      numberPurchasedAt: null
+      numberPurchasedAt: null,
+      numberRentExpiresAt: null
     },
     create: {
       phone: DEMO_PHONE,
@@ -48,7 +49,8 @@ async function main() {
       password,
       rubleBalance: 45,
       minuteBalanceSeconds: 300,
-      totalPurchasedSeconds: 0
+      totalPurchasedSeconds: 0,
+      numberRentExpiresAt: null
     }
   });
 
@@ -72,6 +74,10 @@ async function main() {
       greetingText: "Здравствуйте! Я ИИ-оператор ресторана Echte Doner. Доставка или самовывоз?",
       forwardingPhone: user.phone,
       forwardingEnabled: true,
+      forwardingOnComplete: true,
+      forwardingOnStalemate: true,
+      realtimeModel: "gpt-realtime-2",
+      voice: "alloy",
       maxDialogSeconds: 120,
       reservedNumberId: null,
       status: "ACTIVE"
@@ -85,6 +91,10 @@ async function main() {
       greetingText: "Здравствуйте! Я ИИ-оператор ресторана Echte Doner. Доставка или самовывоз?",
       forwardingPhone: user.phone,
       forwardingEnabled: true,
+      forwardingOnComplete: true,
+      forwardingOnStalemate: true,
+      realtimeModel: "gpt-realtime-2",
+      voice: "alloy",
       maxDialogSeconds: 120,
       status: "ACTIVE"
     }
@@ -99,6 +109,10 @@ async function main() {
       greetingText: "Здравствуйте! Это Echte Doner, можно задать один короткий вопрос?",
       forwardingPhone: user.phone,
       forwardingEnabled: true,
+      forwardingOnComplete: true,
+      forwardingOnStalemate: true,
+      realtimeModel: "gpt-realtime-2",
+      voice: "alloy",
       maxDialogSeconds: 90,
       reservedNumberId: null,
       status: "ACTIVE"
@@ -112,6 +126,10 @@ async function main() {
       greetingText: "Здравствуйте! Это Echte Doner, можно задать один короткий вопрос?",
       forwardingPhone: user.phone,
       forwardingEnabled: true,
+      forwardingOnComplete: true,
+      forwardingOnStalemate: true,
+      realtimeModel: "gpt-realtime-2",
+      voice: "alloy",
       maxDialogSeconds: 90,
       status: "ACTIVE"
     }
@@ -156,10 +174,71 @@ async function main() {
   await prisma.billingTransaction.create({
     data: {
       userId: user.id,
-      type: "FREE_GRANT",
+      type: BillingTransactionType.FREE_GRANT,
       amountSeconds: 300,
       note: "Registration free minutes"
     }
+  });
+
+  await prisma.billingTransaction.createMany({
+    data: [
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -184,
+        amountRub: -19,
+        note: "gpt-realtime-mini · inbound · +79054176285",
+        createdAt: new Date(Date.now() - 35 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -96,
+        amountRub: -10,
+        note: "gpt-realtime-mini · inbound · +79031234567",
+        createdAt: new Date(Date.now() - 180 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -72,
+        amountRub: -8,
+        note: "gpt-realtime-mini · outbound · +79261230044",
+        createdAt: new Date(Date.now() - 420 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -60,
+        amountRub: -6,
+        note: "gpt-realtime-mini · inbound · +79160001122",
+        createdAt: new Date(Date.now() - 26 * 60 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -45,
+        amountRub: -5,
+        note: "gpt-realtime-mini · outbound · +79031234567",
+        createdAt: new Date(Date.now() - 49 * 60 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -135,
+        amountRub: -14,
+        note: "gpt-realtime-mini · inbound · +79261230044",
+        createdAt: new Date(Date.now() - 72 * 60 * 60 * 1000)
+      },
+      {
+        userId: user.id,
+        type: BillingTransactionType.CALL_CHARGE,
+        amountSeconds: -30,
+        amountRub: -3,
+        note: "gpt-realtime-mini · outbound · +79160001122",
+        createdAt: new Date(Date.now() - 96 * 60 * 60 * 1000)
+      }
+    ]
   });
 
   await prisma.callLog.createMany({
@@ -205,9 +284,9 @@ async function main() {
 
   await prisma.outboundContact.createMany({
     data: [
-      { userId: user.id, phone: "+79261230044", status: OutboundContactStatus.CALLED, attempts: 1 },
-      { userId: user.id, phone: "+79160001122", status: OutboundContactStatus.PENDING },
-      { userId: user.id, phone: "+79031234567", status: OutboundContactStatus.PENDING }
+      { userId: user.id, phone: "+79261230044" },
+      { userId: user.id, phone: "+79160001122" },
+      { userId: user.id, phone: "+79031234567" }
     ],
     skipDuplicates: true
   });

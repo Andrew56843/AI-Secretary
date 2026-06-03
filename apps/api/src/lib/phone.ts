@@ -6,6 +6,10 @@ export function normalizePhone(input: string) {
     return "";
   }
 
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
   if (digits.length === 11 && digits.startsWith("8")) {
     return `+7${digits.slice(1)}`;
   }
@@ -14,7 +18,7 @@ export function normalizePhone(input: string) {
 }
 
 export function isValidPhone(phone: string) {
-  return /^\+\d{10,15}$/.test(phone);
+  return /^\+7\d{10}$/.test(phone);
 }
 
 export function extractPhones(input: string) {

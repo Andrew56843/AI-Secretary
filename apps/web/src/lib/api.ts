@@ -1,8 +1,11 @@
 import type {
   AssistantProfile,
+  BillingPagination,
   AuthResponse,
   BillingState,
+  BillingTransaction,
   CallLog,
+  CallLogsPagination,
   GoogleIntegration,
   IntegrationsState,
   OutboundContact,
@@ -18,7 +21,7 @@ import type {
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
 type ApiRequestOptions = {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   token?: string | null;
 };
@@ -78,11 +81,34 @@ export function getBilling(token: string) {
   return request<{ billing: BillingState }>("/api/billing/me", { token });
 }
 
-export function topUpBalance(token: string, payload: { minutes: number; amountRub: number }) {
+export function getBillingCharges(token: string, params: { page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) {
+    query.set("page", String(params.page));
+  }
+  if (params.pageSize) {
+    query.set("pageSize", String(params.pageSize));
+  }
+
+  const serializedQuery = query.toString();
+  const suffix = serializedQuery ? `?${serializedQuery}` : "";
+  return request<{ transactions: BillingTransaction[]; pagination: BillingPagination }>(`/api/billing/charges${suffix}`, {
+    token
+  });
+}
+
+export function topUpBalance(token: string, payload: { amountRub: number }) {
   return request<{ billing: BillingState }>("/api/billing/top-up", {
     token,
     method: "POST",
     body: payload
+  });
+}
+
+export function rentPhoneNumber(token: string) {
+  return request<{ billing: BillingState }>("/api/billing/number-rental", {
+    token,
+    method: "POST"
   });
 }
 
@@ -137,6 +163,10 @@ export function saveProfile(
     prompt: string;
     greetingText: string;
     forwardingEnabled: boolean;
+    forwardingOnComplete: boolean;
+    forwardingOnStalemate: boolean;
+    realtimeModel: AssistantProfile["realtimeModel"];
+    voice: AssistantProfile["voice"];
     maxDialogSeconds: number;
   }
 ) {
@@ -155,9 +185,21 @@ export function updateProfileForwarding(token: string, mode: UiMode, forwardingE
   });
 }
 
-export function getCallLogs(token: string, direction?: UiMode) {
-  const query = direction ? `?direction=${direction}` : "";
-  return request<{ logs: CallLog[] }>(`/api/call-logs/me${query}`, { token });
+export function getCallLogs(token: string, direction?: UiMode, params: { page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams();
+  if (direction) {
+    query.set("direction", direction);
+  }
+  if (params.page) {
+    query.set("page", String(params.page));
+  }
+  if (params.pageSize) {
+    query.set("pageSize", String(params.pageSize));
+  }
+
+  const serializedQuery = query.toString();
+  const suffix = serializedQuery ? `?${serializedQuery}` : "";
+  return request<{ logs: CallLog[]; pagination: CallLogsPagination }>(`/api/call-logs/me${suffix}`, { token });
 }
 
 export function getContactNames(token: string) {
@@ -169,31 +211,6 @@ export function saveContactName(token: string, payload: { phone: string; name: s
     token,
     method: "PUT",
     body: payload
-  });
-}
-
-export function createDemoCallLog(token: string, direction: UiMode) {
-  const randomStatus = ["SUCCESS", "ESCALATED", "MISSED"][Math.floor(Math.random() * 3)] as
-    | "SUCCESS"
-    | "ESCALATED"
-    | "MISSED";
-
-  return request<{ log: CallLog }>("/api/call-logs/mock", {
-    token,
-    method: "POST",
-    body: {
-      direction,
-      customerPhone: direction === "inbound" ? "+79054176285" : "+79160001122",
-      durationSeconds: 45 + Math.floor(Math.random() * 240),
-      status: randomStatus,
-      summary:
-        direction === "inbound"
-          ? "Входящий демо-звонок обработан, итог разговора сохранен."
-          : "Исходящий демо-звонок завершен, результат обзвона сохранен.",
-      transcript:
-        "Assi: Здравствуйте! Я ИИ-секретарь.\nUser: Да, слушаю.\nAssi: Зафиксировал результат и завершил разговор.",
-      recordingUrl: "https://example.com/calls/demo-call.mp3"
-    }
   });
 }
 
@@ -223,16 +240,15 @@ export function importOutboundContacts(token: string, rawNumbers: string) {
 }
 
 export function createOutboundDemoCall(token: string, contactId: string) {
-  return request<{ contact: OutboundContact; log: CallLog }>(`/api/outbound/contacts/${contactId}/mock-call`, {
+  return request<{ removedContactId: string; log: CallLog }>(`/api/outbound/contacts/${contactId}/mock-call`, {
     token,
     method: "POST"
   });
 }
 
-export function updateOutboundContactQueue(token: string, contactId: string, queuedForCall: boolean) {
-  return request<{ contact: OutboundContact }>(`/api/outbound/contacts/${contactId}/queue`, {
+export function deleteOutboundContact(token: string, contactId: string) {
+  return request<void>(`/api/outbound/contacts/${contactId}`, {
     token,
-    method: "PUT",
-    body: { queuedForCall }
+    method: "DELETE"
   });
 }

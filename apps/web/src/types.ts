@@ -21,6 +21,19 @@ export type ReservedPhoneNumber = {
   assigned: boolean;
 };
 
+export type RealtimeModel = "gpt-realtime-mini" | "gpt-realtime-2";
+export type RealtimeVoice =
+  | "alloy"
+  | "ash"
+  | "ballad"
+  | "coral"
+  | "echo"
+  | "sage"
+  | "shimmer"
+  | "verse"
+  | "marin"
+  | "cedar";
+
 export type AssistantProfile = {
   id: string;
   mode: "INBOUND" | "OUTBOUND";
@@ -30,6 +43,10 @@ export type AssistantProfile = {
   greetingText: string;
   forwardingPhone: string;
   forwardingEnabled: boolean;
+  forwardingOnComplete: boolean;
+  forwardingOnStalemate: boolean;
+  realtimeModel: RealtimeModel;
+  voice: RealtimeVoice;
   maxDialogSeconds: number;
   status: "ACTIVE" | "PAUSED";
   reservedNumberId?: string | null;
@@ -80,6 +97,7 @@ export type OutboundContact = {
   status: "PENDING" | "CALLED" | "FAILED";
   queuedForCall: boolean;
   attempts: number;
+  nextAttemptAt?: string | null;
   lastCallLogId?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -88,9 +106,6 @@ export type OutboundContact = {
 export type OutboundStats = {
   total: number;
   pending: number;
-  queued: number;
-  called: number;
-  failed: number;
 };
 
 export type OutboundPagination = {
@@ -102,20 +117,28 @@ export type OutboundPagination = {
   hasNextPage: boolean;
 };
 
+export type CallLogsPagination = OutboundPagination;
+
 export type BillingTransaction = {
   id: string;
-  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE";
+  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE";
   amountSeconds: number;
   amountRub?: number | null;
   note?: string | null;
   createdAt: string;
 };
 
+export type BillingPagination = OutboundPagination;
+
 export type BillingState = {
   rubleBalance: number;
   minuteBalanceSeconds: number;
   totalPurchasedSeconds: number;
   numberPurchasedAt?: string | null;
+  numberRentExpiresAt?: string | null;
+  numberRentalPriceRub: number;
+  numberRenewalAvailable: boolean;
+  numberRentDaysLeft?: number | null;
   reservedNumber?: ReservedPhoneNumber | null;
   transactions: BillingTransaction[];
 };

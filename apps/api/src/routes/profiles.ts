@@ -10,12 +10,19 @@ const modeParamSchema = z.enum(["inbound", "outbound"]).transform((value) =>
   value === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND
 );
 
+const realtimeModelSchema = z.enum(["gpt-realtime-mini", "gpt-realtime-2"]);
+const voiceSchema = z.enum(["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"]);
+
 const updateProfileSchema = z.object({
   title: z.string().trim().min(2).max(100),
   businessName: z.string().trim().max(120).optional(),
   prompt: z.string().trim().min(20).max(6000),
   greetingText: z.string().trim().min(4).max(600),
   forwardingEnabled: z.boolean().optional(),
+  forwardingOnComplete: z.boolean().optional(),
+  forwardingOnStalemate: z.boolean().optional(),
+  realtimeModel: realtimeModelSchema.optional(),
+  voice: voiceSchema.optional(),
   maxDialogSeconds: z.number().int().min(15).max(600)
 });
 
@@ -30,6 +37,29 @@ function includeProfileRelations() {
       select: { callLogs: true }
     }
   } satisfies Prisma.AssistantProfileInclude;
+}
+
+function resolveForwardingRules(
+  payload: {
+    forwardingEnabled?: boolean;
+    forwardingOnComplete?: boolean;
+    forwardingOnStalemate?: boolean;
+  },
+  existing?: {
+    forwardingEnabled: boolean;
+    forwardingOnComplete: boolean;
+    forwardingOnStalemate: boolean;
+  }
+) {
+  const fallbackEnabled = payload.forwardingEnabled ?? existing?.forwardingEnabled ?? true;
+  const forwardingOnComplete = payload.forwardingOnComplete ?? existing?.forwardingOnComplete ?? fallbackEnabled;
+  const forwardingOnStalemate = payload.forwardingOnStalemate ?? existing?.forwardingOnStalemate ?? fallbackEnabled;
+
+  return {
+    forwardingEnabled: forwardingOnComplete || forwardingOnStalemate,
+    forwardingOnComplete,
+    forwardingOnStalemate
+  };
 }
 
 profilesRouter.get("/numbers/free", requireAuth, async (_req, res) => {
@@ -79,6 +109,8 @@ profilesRouter.put("/:mode/forwarding", requireAuth, async (req, res) => {
     },
     data: {
       forwardingEnabled: parsed.data.forwardingEnabled,
+      forwardingOnComplete: parsed.data.forwardingEnabled,
+      forwardingOnStalemate: parsed.data.forwardingEnabled,
       forwardingPhone: req.user!.phone
     },
     include: includeProfileRelations()
@@ -113,6 +145,8 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
         });
 
         if (!existing) {
+          const forwardingRules = resolveForwardingRules(payload);
+
           return tx.assistantProfile.create({
             data: {
               userId,
@@ -122,12 +156,16 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
               prompt: payload.prompt,
               greetingText: payload.greetingText,
               forwardingPhone: user.phone,
-              forwardingEnabled: payload.forwardingEnabled ?? true,
+              ...forwardingRules,
+              realtimeModel: payload.realtimeModel ?? "gpt-realtime-2",
+              voice: payload.voice ?? "alloy",
               maxDialogSeconds: payload.maxDialogSeconds
             },
             include: includeProfileRelations()
           });
         }
+
+        const forwardingRules = resolveForwardingRules(payload, existing);
 
         return tx.assistantProfile.update({
           where: { id: existing.id },
@@ -137,7 +175,9 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
             prompt: payload.prompt,
             greetingText: payload.greetingText,
             forwardingPhone: user.phone,
-            ...(payload.forwardingEnabled !== undefined ? { forwardingEnabled: payload.forwardingEnabled } : {}),
+            ...forwardingRules,
+            ...(payload.realtimeModel !== undefined ? { realtimeModel: payload.realtimeModel } : {}),
+            ...(payload.voice !== undefined ? { voice: payload.voice } : {}),
             maxDialogSeconds: payload.maxDialogSeconds
           },
           include: includeProfileRelations()

@@ -47,11 +47,14 @@ async function createDefaultProfiles(tx: Prisma.TransactionClient, userId: strin
         mode: CallDirection.INBOUND,
         title: "Входящие звонки",
         businessName: "Мой бизнес",
-        prompt:
-          "Ты ИИ-секретарь компании. Отвечай на входящие звонки, уточняй цель обращения, помогай клиенту и переводи звонок владельцу, если вопрос выходит за рамки сценария.",
-        greetingText: "Здравствуйте! Я ИИ-секретарь. Чем могу помочь?",
+        prompt: "",
+        greetingText: "",
         forwardingPhone: phone,
         forwardingEnabled: true,
+        forwardingOnComplete: true,
+        forwardingOnStalemate: true,
+        realtimeModel: "gpt-realtime-2",
+        voice: "alloy",
         maxDialogSeconds: 120
       },
       {
@@ -59,11 +62,14 @@ async function createDefaultProfiles(tx: Prisma.TransactionClient, userId: strin
         mode: CallDirection.OUTBOUND,
         title: "Исходящие звонки",
         businessName: "Мой бизнес",
-        prompt:
-          "Ты ИИ-ассистент для исходящего обзвона. Коротко представляйся, объясняй цель звонка, фиксируй результат разговора и завершай диалог вежливо.",
-        greetingText: "Здравствуйте! Уточню пару вопросов, это займет меньше минуты.",
+        prompt: "",
+        greetingText: "",
         forwardingPhone: phone,
         forwardingEnabled: true,
+        forwardingOnComplete: true,
+        forwardingOnStalemate: true,
+        realtimeModel: "gpt-realtime-2",
+        voice: "alloy",
         maxDialogSeconds: 90
       }
     ]

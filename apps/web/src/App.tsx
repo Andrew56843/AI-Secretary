@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { clearToken, clearUser, getToken, getUser, setToken, setUser } from "./lib/session";
 import { AuthPage } from "./pages/AuthPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { LandingPage } from "./pages/LandingPage";
 import type { AuthResponse, AuthUser } from "./types";
 
 export default function App() {
@@ -40,6 +41,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/" element={token ? <Navigate to="/dashboard" replace /> : <LandingPage onAuthorized={handleAuthorized} />} />
         <Route
           path="/auth"
           element={token ? <Navigate to="/dashboard" replace /> : <AuthPage onAuthorized={handleAuthorized} />}
@@ -54,7 +56,7 @@ export default function App() {
             )
           }
         />
-        <Route path="*" element={<Navigate to={token ? "/dashboard" : "/auth"} replace />} />
+        <Route path="*" element={<Navigate to={token ? "/dashboard" : "/"} replace />} />
       </Routes>
     </BrowserRouter>
   );

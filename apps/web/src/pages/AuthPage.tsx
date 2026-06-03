@@ -7,12 +7,52 @@ type AuthPageProps = {
   onAuthorized: (data: AuthResponse) => void;
 };
 
+type AuthPanelProps = AuthPageProps & {
+  className?: string;
+};
+
 type AuthMode = "login" | "register" | "recover";
 
-export function AuthPage({ onAuthorized }: AuthPageProps) {
+const RU_PHONE_PREFIX = "+7";
+
+function formatRuPhoneInput(input: string) {
+  let digits = input.replace(/\D/g, "");
+
+  if (digits.startsWith("7") || digits.startsWith("8")) {
+    digits = digits.slice(1);
+  }
+
+  const localDigits = digits.slice(0, 10);
+
+  const operator = localDigits.slice(0, 3);
+  const middle = localDigits.slice(3, 6);
+  const firstPair = localDigits.slice(6, 8);
+  const secondPair = localDigits.slice(8, 10);
+
+  let formatted = RU_PHONE_PREFIX;
+  if (operator) {
+    formatted += `(${operator}`;
+  }
+  if (operator.length === 3) {
+    formatted += ")";
+  }
+  if (middle) {
+    formatted += middle;
+  }
+  if (firstPair) {
+    formatted += `-${firstPair}`;
+  }
+  if (secondPair) {
+    formatted += `-${secondPair}`;
+  }
+
+  return formatted;
+}
+
+export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("+79054176285");
+  const [phone, setPhone] = useState(RU_PHONE_PREFIX);
   const [password, setPassword] = useState("");
   const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
   const [pendingAuth, setPendingAuth] = useState<AuthResponse | null>(null);
@@ -57,11 +97,10 @@ export function AuthPage({ onAuthorized }: AuthPageProps) {
   }
 
   return (
-    <main className="shell auth-shell">
-      <section className="auth-panel">
+      <section className={className ? `auth-panel ${className}` : "auth-panel"}>
         <header className="auth-header">
-          <p className="eyebrow">AI Secretary</p>
-          <h1>Кабинет ИИ-секретаря</h1>
+          <p className="eyebrow">callsec</p>
+          <h1>Кабинет callsec</h1>
           <p className="subtitle">Телефонная авторизация, входящие и исходящие звонки, логи разговоров.</p>
         </header>
 
@@ -100,9 +139,12 @@ export function AuthPage({ onAuthorized }: AuthPageProps) {
             Телефон
             <input
               type="tel"
+              inputMode="numeric"
               value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="+79054176285"
+              onChange={(event) => setPhone(formatRuPhoneInput(event.target.value))}
+              placeholder="+7(999)999-99-99"
+              pattern="\+7\(\d{3}\)\d{3}-\d{2}-\d{2}"
+              maxLength={16}
               required
             />
           </label>
@@ -149,6 +191,13 @@ export function AuthPage({ onAuthorized }: AuthPageProps) {
           )}
         </form>
       </section>
+  );
+}
+
+export function AuthPage({ onAuthorized }: AuthPageProps) {
+  return (
+    <main className="shell auth-shell">
+      <AuthPanel onAuthorized={onAuthorized} />
     </main>
   );
 }

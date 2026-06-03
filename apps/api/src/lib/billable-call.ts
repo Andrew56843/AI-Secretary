@@ -1,4 +1,5 @@
 import {
+  BillingTransactionType,
   CallDirection,
   CallStatus,
   Prisma,
@@ -17,6 +18,22 @@ type BillableCallInput = {
   recordingUrl?: string;
 };
 
+const MODEL_RATES_RUB_PER_MINUTE: Record<CallDirection, Record<string, number>> = {
+  [CallDirection.INBOUND]: {
+    "gpt-realtime-mini": 5,
+    "gpt-realtime-2": 10
+  },
+  [CallDirection.OUTBOUND]: {
+    "gpt-realtime-mini": 7,
+    "gpt-realtime-2": 12
+  }
+};
+const DEFAULT_REALTIME_MODEL = "gpt-realtime-2";
+const DEFAULT_RATE_RUB_PER_MINUTE: Record<CallDirection, number> = {
+  [CallDirection.INBOUND]: 10,
+  [CallDirection.OUTBOUND]: 12
+};
+
 export async function createBillableCallLog(tx: Prisma.TransactionClient, input: BillableCallInput) {
   const profile = await tx.assistantProfile.findUnique({
     where: {
@@ -27,10 +44,11 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     },
     select: {
       id: true,
+      realtimeModel: true,
       user: {
         select: {
           id: true,
-          minuteBalanceSeconds: true,
+          rubleBalance: true,
           telegramAccount: {
             select: {
               status: true,
@@ -47,18 +65,20 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     throw new Error("PROFILE_NOT_FOUND");
   }
 
-  if (profile.user.minuteBalanceSeconds < input.durationSeconds) {
-    throw new Error("INSUFFICIENT_MINUTES");
-  }
+  const directionRates = MODEL_RATES_RUB_PER_MINUTE[input.direction];
+  const realtimeModel = directionRates[profile.realtimeModel]
+    ? profile.realtimeModel
+    : DEFAULT_REALTIME_MODEL;
+  const rateRubPerMinute = directionRates[realtimeModel] ?? DEFAULT_RATE_RUB_PER_MINUTE[input.direction];
+  const amountRub = Math.ceil((input.durationSeconds / 60) * rateRubPerMinute);
 
-  const amountRub = Math.ceil((input.durationSeconds / 60) * 9);
+  if (profile.user.rubleBalance < amountRub) {
+    throw new Error("INSUFFICIENT_BALANCE");
+  }
 
   await tx.user.update({
     where: { id: input.userId },
     data: {
-      minuteBalanceSeconds: {
-        decrement: input.durationSeconds
-      },
       rubleBalance: {
         decrement: amountRub
       }
@@ -75,6 +95,16 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       summary: input.summary,
       transcript: input.transcript,
       recordingUrl: input.recordingUrl
+    }
+  });
+
+  await tx.billingTransaction.create({
+    data: {
+      userId: input.userId,
+      type: BillingTransactionType.CALL_CHARGE,
+      amountSeconds: -input.durationSeconds,
+      amountRub: -amountRub,
+      note: `${realtimeModel} · ${input.direction.toLowerCase()} · ${input.customerPhone}`
     }
   });
 

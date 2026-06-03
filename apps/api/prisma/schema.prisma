@@ -16,6 +16,7 @@ model User {
   minuteBalanceSeconds  Int                  @default(300)
   totalPurchasedSeconds Int                  @default(0)
   numberPurchasedAt     DateTime?
+  numberRentExpiresAt   DateTime?
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @updatedAt
   profiles              AssistantProfile[]
@@ -46,6 +47,10 @@ model AssistantProfile {
   greetingText     String
   forwardingPhone  String
   forwardingEnabled Boolean            @default(true)
+  forwardingOnComplete Boolean         @default(true)
+  forwardingOnStalemate Boolean        @default(true)
+  realtimeModel   String              @default("gpt-realtime-2")
+  voice           String              @default("alloy")
   maxDialogSeconds Int                 @default(120)
   status           ProfileStatus       @default(ACTIVE)
   reservedNumberId String?
@@ -87,6 +92,7 @@ model OutboundContact {
   status    OutboundContactStatus @default(PENDING)
   queuedForCall Boolean             @default(false)
   attempts  Int                   @default(0)
+  nextAttemptAt DateTime?
   lastCallLogId String?
   createdAt DateTime              @default(now())
   updatedAt DateTime              @updatedAt
@@ -196,6 +202,7 @@ enum BillingTransactionType {
   FREE_GRANT
   TOP_UP
   NUMBER_PURCHASE
+  CALL_CHARGE
 }
 
 enum IntegrationStatus {
