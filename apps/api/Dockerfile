@@ -13,14 +13,12 @@ COPY apps/api ./apps/api
 RUN npm run db:generate --workspace @ai-secretary/api
 RUN npm run build --workspace @ai-secretary/api
 
-FROM base AS prod-deps
+FROM builder AS prod-deps
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json ./
-COPY apps/api/package.json ./apps/api/package.json
-COPY apps/web/package.json ./apps/web/package.json
-
-RUN npm ci --omit=dev --workspace @ai-secretary/api --include-workspace-root && npm cache clean --force
+RUN npm prune --omit=dev --workspace @ai-secretary/api --include-workspace-root \
+  && npm cache clean --force \
+  && echo "Production dependencies pruned"
 
 FROM base AS runtime
 ENV NODE_ENV=production
