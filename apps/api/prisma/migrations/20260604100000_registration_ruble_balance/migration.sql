@@ -1,0 +1,2 @@
+ALTER TABLE "User" ALTER COLUMN "rubleBalance" SET DEFAULT 100;
+ALTER TABLE "User" ALTER COLUMN "minuteBalanceSeconds" SET DEFAULT 0;

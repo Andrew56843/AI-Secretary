@@ -12,8 +12,8 @@ model User {
   phone                 String               @unique
   fullName              String?
   password              String
-  rubleBalance          Int                  @default(0)
-  minuteBalanceSeconds  Int                  @default(300)
+  rubleBalance          Int                  @default(100)
+  minuteBalanceSeconds  Int                  @default(0)
   totalPurchasedSeconds Int                  @default(0)
   numberPurchasedAt     DateTime?
   numberRentExpiresAt   DateTime?

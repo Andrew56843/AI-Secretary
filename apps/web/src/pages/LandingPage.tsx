@@ -33,8 +33,46 @@ const LANDING_MODES = [
   }
 ];
 
+const LANDING_CONTACTS = [
+  { label: "Телефон", value: "+79054176285", href: "tel:+79054176285", actionLabel: "Позвонить" },
+  { label: "Telegram", value: "@Drunlet", href: "https://t.me/Drunlet", actionLabel: "Открыть" },
+  { label: "WhatsApp", value: "+79054176285", href: "https://wa.me/79054176285", actionLabel: "Написать" },
+  { label: "Email", value: "79054176285@yandex.ru", href: "mailto:79054176285@yandex.ru", actionLabel: "Написать" }
+];
+
 export function LandingPage({ onAuthorized }: LandingPageProps) {
   const [authOpen, setAuthOpen] = useState(false);
+  const [copiedContact, setCopiedContact] = useState<string | null>(null);
+
+  async function copyContact(key: string, value: string) {
+    let copied = false;
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied) {
+      const field = document.createElement("textarea");
+      field.value = value;
+      field.setAttribute("readonly", "");
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.append(field);
+      field.select();
+      document.execCommand("copy");
+      field.remove();
+    }
+
+    setCopiedContact(key);
+    window.setTimeout(() => {
+      setCopiedContact((current) => (current === key ? null : current));
+    }, 1600);
+  }
 
   return (
     <main className="landing-page">
@@ -68,7 +106,9 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
           <span className="landing-logo">callsec</span>
           <div className="landing-nav-links">
             <a href="#how">Как работает</a>
+            <a href="#demo">Демо</a>
             <a href="#modes">Возможности</a>
+            <a href="#contacts">Контакты</a>
             <button className="outline-link" type="button" onClick={() => setAuthOpen(true)}>
               Войти
             </button>
@@ -82,6 +122,7 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
             AI-секретарь для входящих и исходящих звонков: отвечает клиентам, ведет сценарий, фиксирует результат и
             передает сложные разговоры владельцу.
           </p>
+          <p className="landing-bonus">При регистрации на балансе сразу 100 ₽ для любых звонков, включая тестовые.</p>
           <div className="landing-actions">
             <button className="primary-link" type="button" onClick={() => setAuthOpen(true)}>
               Начать
@@ -100,6 +141,42 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
             <strong>{point}</strong>
           </article>
         ))}
+      </section>
+
+      <section className="landing-section landing-demo-section" id="demo">
+        <div className="landing-section-heading">
+          <p className="eyebrow landing-domain">демонстрация</p>
+          <h2>Видео и аудио примеры работы</h2>
+        </div>
+        <div className="landing-demo-grid">
+          <article className="landing-video-demo">
+            <div className="landing-video-frame">
+              <div className="landing-play-mark" aria-hidden="true">
+                <span />
+              </div>
+              <div>
+                <strong>Видео демонстрация</strong>
+                <p>Как callsec принимает звонок, ведет сценарий и сохраняет результат в кабинете.</p>
+              </div>
+            </div>
+          </article>
+          <article className="landing-audio-demo">
+            <div className="landing-audio-copy">
+              <strong>Аудио демонстрация</strong>
+              <p>Пример живого разговора с AI-секретарем и качества голоса.</p>
+            </div>
+            <div className="landing-audio-wave" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+            <audio className="landing-audio-control" controls preload="none" aria-label="Аудио демонстрация callsec" />
+          </article>
+        </div>
       </section>
 
       <section className="landing-section" id="how">
@@ -141,6 +218,34 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
         <button className="primary-link" type="button" onClick={() => setAuthOpen(true)}>
           Войти в кабинет
         </button>
+      </section>
+
+      <section className="landing-contacts" id="contacts">
+        <div>
+          <p className="eyebrow landing-domain">связь</p>
+          <h2>Контакты</h2>
+        </div>
+        <div className="landing-contact-list">
+          {LANDING_CONTACTS.map((contact) => (
+            <article className="landing-contact-card" key={contact.label}>
+              <span className="landing-contact-label">{contact.label}</span>
+              <a className="landing-contact-value" href={contact.href} target={contact.href.startsWith("http") ? "_blank" : undefined} rel={contact.href.startsWith("http") ? "noreferrer" : undefined}>
+                {contact.value}
+              </a>
+              <div className="landing-contact-actions">
+                <a className="landing-open-link" href={contact.href} target={contact.href.startsWith("http") ? "_blank" : undefined} rel={contact.href.startsWith("http") ? "noreferrer" : undefined}>
+                  {contact.actionLabel}
+                </a>
+                <button className="landing-copy-button" type="button" onClick={() => void copyContact(contact.label, contact.value)}>
+                  {copiedContact === contact.label ? "Скопировано" : "Копировать"}
+                </button>
+              </div>
+              <span className="sr-only" aria-live="polite">
+                {copiedContact === contact.label ? `${contact.label} скопирован` : ""}
+              </span>
+            </article>
+          ))}
+        </div>
       </section>
 
       {authOpen && (

@@ -14,6 +14,8 @@ const STARTING_POOL = [
 
 const DEMO_PHONE = "+79054176285";
 const DEMO_PASSWORD = "123456";
+const REGISTRATION_START_BALANCE_RUB = 100;
+const DEMO_CALL_CHARGES_RUB = 59;
 
 const INBOUND_PROMPT =
   "Ты ИИ-секретарь ресторана Echte Doner. Принимай входящие звонки, уточняй доставку или самовывоз, помогай выбрать позиции из меню, подтверждай заказ и переводь звонок владельцу, если клиент просит нестандартное решение.";
@@ -37,8 +39,8 @@ async function main() {
     update: {
       fullName: "Андрей",
       password,
-      rubleBalance: 45,
-      minuteBalanceSeconds: 300,
+      rubleBalance: REGISTRATION_START_BALANCE_RUB - DEMO_CALL_CHARGES_RUB,
+      minuteBalanceSeconds: 0,
       totalPurchasedSeconds: 0,
       numberPurchasedAt: null,
       numberRentExpiresAt: null
@@ -47,8 +49,8 @@ async function main() {
       phone: DEMO_PHONE,
       fullName: "Андрей",
       password,
-      rubleBalance: 45,
-      minuteBalanceSeconds: 300,
+      rubleBalance: REGISTRATION_START_BALANCE_RUB - DEMO_CALL_CHARGES_RUB,
+      minuteBalanceSeconds: 0,
       totalPurchasedSeconds: 0,
       numberRentExpiresAt: null
     }
@@ -175,8 +177,9 @@ async function main() {
     data: {
       userId: user.id,
       type: BillingTransactionType.FREE_GRANT,
-      amountSeconds: 300,
-      note: "Registration free minutes"
+      amountSeconds: 0,
+      amountRub: REGISTRATION_START_BALANCE_RUB,
+      note: "Registration starting balance"
     }
   });
 

@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const authRouter = Router();
+const REGISTRATION_START_BALANCE_RUB = 100;
 
 const phoneSchema = z
   .string()
@@ -76,13 +77,14 @@ async function createDefaultProfiles(tx: Prisma.TransactionClient, userId: strin
   });
 }
 
-async function createFreeMinuteGrant(tx: Prisma.TransactionClient, userId: string) {
+async function createStartingBalanceGrant(tx: Prisma.TransactionClient, userId: string) {
   await tx.billingTransaction.create({
     data: {
       userId,
       type: "FREE_GRANT",
-      amountSeconds: 300,
-      note: "Registration free minutes"
+      amountSeconds: 0,
+      amountRub: REGISTRATION_START_BALANCE_RUB,
+      note: "Registration starting balance"
     }
   });
 }
@@ -112,12 +114,14 @@ authRouter.post("/register", async (req, res) => {
           data: {
             phone,
             fullName,
-            password: passwordHash
+            password: passwordHash,
+            rubleBalance: REGISTRATION_START_BALANCE_RUB,
+            minuteBalanceSeconds: 0
           }
         });
 
         await createDefaultProfiles(tx, created.id, created.phone);
-        await createFreeMinuteGrant(tx, created.id);
+        await createStartingBalanceGrant(tx, created.id);
         return created;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
