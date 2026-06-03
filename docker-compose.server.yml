@@ -1,37 +1,21 @@
 name: ai-secretary-saas
 
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: ai-secretary-saas-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ai_secretary
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_secretary"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: ai-secretary-saas-api
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 4000
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/ai_secretary?schema=public
+      DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: ${CORS_ORIGIN}
+    networks:
+      - default
+      - coolify
     ports:
       - "14000:4000"
 
@@ -48,7 +32,6 @@ services:
     ports:
       - "18080:80"
 
-volumes:
-  pg_data:
+networks:
+  coolify:
     external: true
-    name: ai-secretary-saas_pg_data
