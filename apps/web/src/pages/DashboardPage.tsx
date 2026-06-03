@@ -1048,7 +1048,6 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
               >
                 Шаблоны
               </button>
-              <span>{activeProfile?.status ?? "ACTIVE"}</span>
             </div>
           </div>
 
