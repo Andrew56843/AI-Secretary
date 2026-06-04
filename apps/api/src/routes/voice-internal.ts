@@ -98,6 +98,13 @@ function mapProfileToVoiceConfig(
           phone: true;
           numberRentExpiresAt: true;
           rubleBalance: true;
+          telegramAccount: {
+            select: {
+              status: true;
+              chatId: true;
+              username: true;
+            };
+          };
         };
       };
     };
@@ -141,7 +148,14 @@ function mapProfileToVoiceConfig(
       id: profile.user.id,
       phone: profile.user.phone,
       rubleBalance: profile.user.rubleBalance,
-      numberRentExpiresAt: profile.user.numberRentExpiresAt
+      numberRentExpiresAt: profile.user.numberRentExpiresAt,
+      telegram:
+        profile.user.telegramAccount?.status === "CONNECTED"
+          ? {
+              chatId: profile.user.telegramAccount.chatId,
+              username: profile.user.telegramAccount.username
+            }
+          : null
     }
   };
 }
@@ -169,7 +183,14 @@ async function findInboundProfileByDid(did: string) {
           id: true,
           phone: true,
           numberRentExpiresAt: true,
-          rubleBalance: true
+          rubleBalance: true,
+          telegramAccount: {
+            select: {
+              status: true,
+              chatId: true,
+              username: true
+            }
+          }
         }
       }
     }
