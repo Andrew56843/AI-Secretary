@@ -4,6 +4,8 @@ import * as bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 const STARTING_POOL = [
+  "+79952225212",
+  "+79952225213",
   "+74950010001",
   "+74950010002",
   "+74950010003",

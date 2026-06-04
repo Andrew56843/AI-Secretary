@@ -18,6 +18,7 @@ export type AuthResponse = {
 export type ReservedPhoneNumber = {
   id: string;
   number: string;
+  providerDid?: string | null;
   assigned: boolean;
 };
 

@@ -33,6 +33,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/ai_secretary?schema=public
       JWT_SECRET: change-me-in-development-secret
       CORS_ORIGIN: http://localhost:5173
+      VOICE_SERVICE_TOKEN: local-voice-service-token-change-me
     volumes:
       - ./:/app
       - node_modules_dev:/app/node_modules

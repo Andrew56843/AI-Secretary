@@ -13,6 +13,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: ${CORS_ORIGIN}
+      VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN}
     networks:
       - default
       - coolify

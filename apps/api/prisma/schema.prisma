@@ -29,12 +29,13 @@ model User {
 }
 
 model ReservedPhoneNumber {
-  id        String             @id @default(cuid())
-  number    String             @unique
-  assigned  Boolean            @default(false)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
-  profiles  AssistantProfile[]
+  id          String             @id @default(cuid())
+  number      String             @unique
+  providerDid String?            @unique
+  assigned    Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  profiles    AssistantProfile[]
 }
 
 model AssistantProfile {

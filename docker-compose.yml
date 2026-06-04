@@ -34,6 +34,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/ai_secretary?schema=public
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-very-secret}
       CORS_ORIGIN: http://localhost:8080
+      VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN:-local-voice-service-token-change-me}
     ports:
       - "4000:4000"
 

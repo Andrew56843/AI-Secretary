@@ -10,6 +10,7 @@ import { contactNamesRouter } from "./routes/contact-names.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { outboundRouter } from "./routes/outbound.js";
 import { profilesRouter } from "./routes/profiles.js";
+import { voiceInternalRouter } from "./routes/voice-internal.js";
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/integrations", integrationsRouter);
 app.use("/api/profiles", profilesRouter);
 app.use("/api/call-logs", callLogsRouter);
 app.use("/api/outbound", outboundRouter);
+app.use("/internal/voice", voiceInternalRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ message: "Not found" });
