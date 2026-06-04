@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 const RESERVED_NUMBERS = ["+79952225212", "+79952225213"];
 const OWNER_PHONE = "+79054176285";
 const OWNER_PASSWORD = "123456";
-const START_BALANCE_RUB = 100;
+const START_BALANCE_RUB = 1000;
 
 const INBOUND_PROMPT =
   "Ты AI-секретарь. Отвечай на входящие звонки по-русски, говори кратко и вежливо. Собирай имя клиента, причину обращения и контактные данные. Если вопрос сложный или клиент просит человека, переведи звонок владельцу аккаунта.";
