@@ -135,7 +135,7 @@ model TelegramAccount {
   id          String            @id @default(cuid())
   userId      String            @unique
   status      IntegrationStatus @default(DISCONNECTED)
-  botUsername String            @default("AISecretaryDemoBot")
+  botUsername String            @default("AISecretaryBot")
   linkToken   String            @unique
   chatId      String?
   username    String?
