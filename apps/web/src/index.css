@@ -1141,6 +1141,12 @@ label {
   font-size: 1.35rem;
 }
 
+.number-guide-btn {
+  width: fit-content;
+  max-width: 100%;
+  justify-self: start;
+}
+
 .account-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1959,6 +1965,85 @@ label {
   width: min(760px, 100%);
 }
 
+.forwarding-guide-modal {
+  width: min(680px, 100%);
+}
+
+.forwarding-guide-content {
+  display: grid;
+  gap: 0.85rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.forwarding-number-pair,
+.ussd-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.forwarding-number-pair div,
+.ussd-grid div {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+  border: 1px solid #dce2df;
+  border-radius: 6px;
+  padding: 0.62rem 0.72rem;
+  background: #f8faf7;
+}
+
+.forwarding-number-pair span,
+.ussd-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.forwarding-number-pair strong {
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 820;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.copy-number-btn {
+  justify-self: start;
+}
+
+.forwarding-steps {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1.35rem;
+  color: #334155;
+}
+
+.ussd-card {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid #dce2df;
+  border-radius: 8px;
+  padding: 0.85rem;
+  background:
+    linear-gradient(135deg, rgba(10, 139, 108, 0.08), rgba(255, 250, 243, 0.62)),
+    #ffffff;
+}
+
+.ussd-grid code {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 5px;
+  padding: 0.35rem 0.45rem;
+  background: #ffffff;
+  color: var(--brand-strong);
+  font-weight: 820;
+  white-space: nowrap;
+  user-select: text;
+}
+
 .instruction-video-frame {
   display: grid;
   place-items: center;
@@ -2276,6 +2361,17 @@ label {
   .video-icon-btn {
     width: 2.45rem;
     min-width: 2.45rem;
+  }
+
+  .number-guide-btn,
+  .copy-number-btn {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .forwarding-number-pair,
+  .ussd-grid {
+    grid-template-columns: 1fr;
   }
 
   .form-actions,

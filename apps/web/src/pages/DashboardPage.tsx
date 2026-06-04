@@ -502,6 +502,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [accessModalOpen, setAccessModalOpen] = useState(false);
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
+  const [forwardingGuideOpen, setForwardingGuideOpen] = useState(false);
   const [contactNameModal, setContactNameModal] = useState<{ phone: string } | null>(null);
   const [contactNameDraft, setContactNameDraft] = useState("");
   const [templatePickerDismissed, setTemplatePickerDismissed] = useState<Record<UiMode, boolean>>({
@@ -789,6 +790,20 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     }
   }
 
+  async function handleCopyReservedNumber() {
+    if (!reservedNumber) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(reservedNumber);
+      setNotice("Номер AI-секретаря скопирован");
+      setError(null);
+    } catch {
+      setError("Не удалось скопировать номер автоматически");
+    }
+  }
+
   function handleVoicePreview(option: VoiceOption) {
     if (!("speechSynthesis" in window)) {
       setNotice("В этом браузере нет встроенного прослушивания голоса");
@@ -1032,6 +1047,9 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
               <p className="hint">Аренда до {numberRentExpiresDate}{numberRentDaysLeft ? ` · ${numberRentDaysLeft}` : ""}</p>
             )}
           </div>
+          <button className="outline-btn number-guide-btn" type="button" onClick={() => setForwardingGuideOpen(true)}>
+            Как настроить переадресацию
+          </button>
         </section>
       </section>
 
@@ -1619,6 +1637,82 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 </a>
                 <a href="mailto:79054176285@yandex.ru">79054176285@yandex.ru</a>
               </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {forwardingGuideOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setForwardingGuideOpen(false)}>
+          <section className="modal-panel forwarding-guide-modal" role="dialog" aria-modal="true" aria-labelledby="forwarding-guide-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-title">
+              <h2 id="forwarding-guide-title">Переадресация на AI-секретаря</h2>
+              <button className="icon-mini-btn" type="button" aria-label="Закрыть" onClick={() => setForwardingGuideOpen(false)}>
+                ×
+              </button>
+            </div>
+
+            <div className="forwarding-guide-content">
+              <p>
+                Чтобы AI-секретарь отвечал на входящие звонки, включите переадресацию со своего номера на номер AI-секретаря.
+              </p>
+
+              <div className="forwarding-number-pair">
+                <div>
+                  <span>Ваш номер</span>
+                  <strong>{user.phone}</strong>
+                </div>
+                <div>
+                  <span>Номер AI-секретаря</span>
+                  <strong>{reservedNumber ?? "Сначала зарезервируйте номер"}</strong>
+                </div>
+              </div>
+
+              {reservedNumber ? (
+                <button className="outline-btn small-btn copy-number-btn" type="button" onClick={() => void handleCopyReservedNumber()}>
+                  Скопировать номер AI-секретаря
+                </button>
+              ) : (
+                <p className="empty-state">Сначала зарезервируйте номер в разделе пополнения баланса, затем вернитесь к этой инструкции.</p>
+              )}
+
+              <ol className="forwarding-steps">
+                <li>Откройте приложение или личный кабинет вашего мобильного оператора.</li>
+                <li>Найдите раздел переадресации вызовов.</li>
+                <li>Выберите режим: все звонки, если AI отвечает вместо вас, или без ответа/занято/недоступен, если AI нужен как подстраховка.</li>
+                <li>Укажите номер AI-секретаря и сохраните настройку.</li>
+                <li>Сделайте тестовый звонок и проверьте лог разговора в кабинете.</li>
+              </ol>
+
+              <section className="ussd-card" aria-label="Примеры USSD-команд">
+                <div>
+                  <p className="eyebrow">USSD-примеры</p>
+                  <p className="hint">Команды могут отличаться у оператора. Если не сработало, настройте переадресацию через приложение оператора или поддержку.</p>
+                </div>
+
+                {reservedNumber ? (
+                  <div className="ussd-grid">
+                    <div>
+                      <span>Все входящие</span>
+                      <code>**21*{reservedNumber}#</code>
+                    </div>
+                    <div>
+                      <span>Если не ответили</span>
+                      <code>**61*{reservedNumber}#</code>
+                    </div>
+                    <div>
+                      <span>Если занято</span>
+                      <code>**67*{reservedNumber}#</code>
+                    </div>
+                    <div>
+                      <span>Если недоступен</span>
+                      <code>**62*{reservedNumber}#</code>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="hint">Команды появятся после резервации номера AI-секретаря.</p>
+                )}
+              </section>
             </div>
           </section>
         </div>
