@@ -909,15 +909,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       const response = await getTelegramLink(token);
       setIntegrations((prev) => ({ google: prev!.google, telegram: response.telegram }));
       if (response.telegram.botLink) {
-        try {
-          await navigator.clipboard.writeText(response.telegram.botLink);
-          setNotice("Ссылка для привязки Telegram скопирована в буфер обмена");
-        } catch {
-          setNotice(`Ссылка для привязки Telegram: ${response.telegram.botLink}`);
-        }
+        window.open(response.telegram.botLink, "_blank", "noopener,noreferrer");
+        setNotice("Открыл Telegram для подключения");
         return;
       }
-      setNotice("Ссылка для привязки Telegram подготовлена");
+      setNotice("Telegram готов к подключению");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Telegram");
     }
@@ -1316,7 +1312,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                   </div>
                 </div>
                 <button className="outline-btn integration-button" type="button" onClick={handleTelegramToggle}>
-                  {integrations?.telegram.status === "CONNECTED" ? "Отключить" : "Получить ссылку"}
+                  {integrations?.telegram.status === "CONNECTED" ? "Отключить" : "Подключить"}
                 </button>
               </article>
             </div>
