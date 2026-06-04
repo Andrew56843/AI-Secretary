@@ -139,6 +139,13 @@ export function connectTelegram(token: string, payload: { username?: string; cha
   });
 }
 
+export function getTelegramLink(token: string) {
+  return request<{ telegram: TelegramIntegration }>("/api/integrations/telegram/link", {
+    token,
+    method: "POST"
+  });
+}
+
 export function disconnectTelegram(token: string) {
   return request<{ telegram: TelegramIntegration }>("/api/integrations/telegram/disconnect", {
     token,

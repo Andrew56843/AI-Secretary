@@ -74,10 +74,10 @@ Connect pgAdmin to PostgreSQL:
 - password: `postgres`
 - database: `ai_secretary`
 
-Demo account:
+Seed account:
 
-- email: `demo@ai-secretary.local`
-- password: `demo-password`
+- phone: `+79054176285`
+- password: `123456`
 
 ## Local development
 
@@ -100,7 +100,7 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Reset database to a reproducible demo state:
+Reset database to a clean development state:
 
 ```bash
 npm run db:reset

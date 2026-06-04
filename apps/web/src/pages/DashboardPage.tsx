@@ -3,7 +3,6 @@ import type { CSSProperties, FormEvent } from "react";
 import {
   changePassword,
   connectGoogleCalendar,
-  connectTelegram,
   createSiteCall,
   deleteOutboundContact,
   disconnectGoogleCalendar,
@@ -15,6 +14,7 @@ import {
   getIntegrations,
   getMyProfiles,
   getOutboundContacts,
+  getTelegramLink,
   importOutboundContacts,
   rentPhoneNumber,
   saveContactName,
@@ -885,11 +885,10 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       }
 
       const response = await connectGoogleCalendar(token, {
-        googleEmail: "demo@gmail.com",
         calendarId: "primary"
       });
       setIntegrations((prev) => ({ google: response.google, telegram: prev!.telegram }));
-      setNotice("Google Calendar подключен в тестовом режиме");
+      setNotice("Google Calendar подключен");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Google Calendar");
     }
@@ -907,12 +906,18 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         return;
       }
 
-      const response = await connectTelegram(token, {
-        username: "@andrew_demo",
-        chatId: "demo-chat-id"
-      });
+      const response = await getTelegramLink(token);
       setIntegrations((prev) => ({ google: prev!.google, telegram: response.telegram }));
-      setNotice("Telegram подключен, новые транскрипты будут отмечаться как отправленные");
+      if (response.telegram.botLink) {
+        try {
+          await navigator.clipboard.writeText(response.telegram.botLink);
+          setNotice("Ссылка для привязки Telegram скопирована в буфер обмена");
+        } catch {
+          setNotice(`Ссылка для привязки Telegram: ${response.telegram.botLink}`);
+        }
+        return;
+      }
+      setNotice("Ссылка для привязки Telegram подготовлена");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Telegram");
     }
@@ -1311,7 +1316,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                   </div>
                 </div>
                 <button className="outline-btn integration-button" type="button" onClick={handleTelegramToggle}>
-                  {integrations?.telegram.status === "CONNECTED" ? "Отключить" : "Подключить"}
+                  {integrations?.telegram.status === "CONNECTED" ? "Отключить" : "Получить ссылку"}
                 </button>
               </article>
             </div>
