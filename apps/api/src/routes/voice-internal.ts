@@ -105,6 +105,40 @@ function createExactGreetingInstruction(greetingText: string) {
   ].join(" ");
 }
 
+function compactPromptText(value: string | null | undefined, maxLength: number) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)
+    .trim();
+}
+
+function createProfileTranscriptionPrompt(profile: {
+  mode: CallDirection;
+  title: string;
+  businessName: string | null;
+  prompt: string;
+}) {
+  const scenario = compactPromptText(profile.prompt, 1600);
+  const businessName = compactPromptText(profile.businessName, 160);
+  const title = compactPromptText(profile.title, 160);
+
+  return [
+    "Русский телефонный разговор с AI-секретарём.",
+    profile.mode === CallDirection.OUTBOUND
+      ? "Тип звонка: исходящий звонок от AI-секретаря клиенту."
+      : "Тип звонка: входящий звонок клиента AI-секретарю.",
+    businessName ? `Компания или проект: ${businessName}.` : "",
+    title ? `Название сценария: ${title}.` : "",
+    "Ожидаемые темы, имена, услуги, адреса, товары и формулировки бери из сценария ниже.",
+    "Сохраняй короткие русские ответы как короткие ответы: да, нет, ага, алло, повтори, тот же номер.",
+    "Не заменяй слова из сценария случайными фамилиями или похожими по звучанию словами.",
+    scenario ? `Сценарий профиля: ${scenario}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function mapProfileToVoiceConfig(
   profile: Prisma.AssistantProfileGetPayload<{
     include: {
@@ -152,6 +186,7 @@ function mapProfileToVoiceConfig(
     autoGreeting: true,
     greetingText: createExactGreetingInstruction(profile.greetingText),
     instructions: profile.prompt,
+    transcriptionPrompt: createProfileTranscriptionPrompt(profile),
     forwardingEnabled: profile.forwardingEnabled,
     forwardingOnComplete: profile.forwardingOnComplete,
     forwardingOnStalemate: profile.forwardingOnStalemate,
