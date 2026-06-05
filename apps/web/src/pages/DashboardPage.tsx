@@ -460,6 +460,15 @@ function formatBillingTitle(transaction: BillingTransaction) {
   return "Стартовый лимит";
 }
 
+function formatBillingMeta(transaction: BillingTransaction) {
+  const date = new Date(transaction.createdAt).toLocaleString();
+  if (transaction.amountSeconds > 0) {
+    return `${date} · ${formatSeconds(transaction.amountSeconds)}`;
+  }
+
+  return date;
+}
+
 function contactMapFromList(contacts: PhoneContactName[]) {
   return contacts.reduce<Record<string, string>>((acc, contact) => {
     acc[contact.phone] = contact.name;
@@ -1609,7 +1618,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                     <div>
                       <strong>{formatBillingTitle(transaction)}</strong>
                       <span>{transaction.note ?? "AI-секретарь"}</span>
-                      <small>{new Date(transaction.createdAt).toLocaleString()} · {formatSeconds(transaction.amountSeconds)}</small>
+                      <small>{formatBillingMeta(transaction)}</small>
                     </div>
                     <b>{formatRubles(transaction.amountRub ?? 0)}</b>
                   </article>

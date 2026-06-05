@@ -13,6 +13,7 @@ const NUMBER_RENT_PRICE_RUB = 299;
 const NUMBER_RENT_PERIOD_DAYS = 30;
 const NUMBER_RENEWAL_WINDOW_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const BILLING_CHARGE_TYPES = [BillingTransactionType.CALL_CHARGE, BillingTransactionType.NUMBER_PURCHASE];
 
 const topUpSchema = z.object({
   amountRub: z.number().int().min(100).max(500000)
@@ -319,7 +320,9 @@ billingRouter.get("/charges", requireAuth, async (req, res) => {
   const { page, pageSize } = parsed.data;
   const where = {
     userId: req.user!.userId,
-    type: BillingTransactionType.CALL_CHARGE
+    type: {
+      in: BILLING_CHARGE_TYPES
+    }
   };
   const total = await prisma.billingTransaction.count({ where });
   const pagination = createPagination(page, pageSize, total);
