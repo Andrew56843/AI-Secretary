@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "crypto";
-import { CallDirection, CallStatus, Prisma, ProfileStatus } from "@prisma/client";
+import { CallDirection, CallStatus, OutboundContactStatus, Prisma, ProfileStatus } from "@prisma/client";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
@@ -19,6 +19,7 @@ const resolveCallSchema = z.object({
 const createCallLogSchema = z.object({
   assistantProfileId: z.string().trim().min(1).optional(),
   did: z.string().trim().min(1).max(64).optional(),
+  outboundContactId: z.string().trim().min(1).optional(),
   direction: z.enum(["INBOUND", "OUTBOUND"]).default("INBOUND"),
   customerPhone: z.string().trim().min(1).max(64),
   status: z.enum([CallStatus.SUCCESS, CallStatus.ESCALATED, CallStatus.MISSED]).default(CallStatus.SUCCESS),
@@ -26,6 +27,15 @@ const createCallLogSchema = z.object({
   summary: z.string().trim().max(2000).optional(),
   transcript: z.string().trim().max(100_000).optional(),
   recordingUrl: z.string().trim().max(2048).optional()
+});
+
+const outboundNextSchema = z.object({
+  limit: z.number().int().min(1).max(5).default(1).optional()
+});
+
+const outboundReleaseSchema = z.object({
+  outboundContactId: z.string().trim().min(1),
+  reason: z.string().trim().max(400).optional()
 });
 
 const telegramLinkSchema = z.object({
@@ -115,7 +125,17 @@ function mapProfileToVoiceConfig(
         };
       };
     };
-  }>
+  }>,
+  extra: {
+    direction?: CallDirection;
+    outboundContact?: {
+      id: string;
+      phone: string;
+      name?: string | null;
+      attempts: number;
+    };
+    outboundCallerId?: string | null;
+  } = {}
 ) {
   const maxDialogSeconds = Math.max(15, profile.maxDialogSeconds);
 
@@ -123,6 +143,7 @@ function mapProfileToVoiceConfig(
     assistantProfileId: profile.id,
     userId: profile.userId,
     clientId: profile.id,
+    direction: extra.direction ?? profile.mode,
     clientName: profile.businessName ?? profile.title,
     businessName: profile.businessName,
     language: "ru",
@@ -151,6 +172,8 @@ function mapProfileToVoiceConfig(
           providerDid: profile.reservedNumber.providerDid
         }
       : null,
+    outboundCallerId: extra.outboundCallerId ?? null,
+    outboundContact: extra.outboundContact ?? null,
     account: {
       id: profile.user.id,
       phone: profile.user.phone,
@@ -165,6 +188,58 @@ function mapProfileToVoiceConfig(
           : null
     }
   };
+}
+
+async function releaseOutboundContactForRetry(
+  tx: Prisma.TransactionClient,
+  contact: { id: string; attempts: number },
+  lastCallLogId?: string
+) {
+  const attempts = contact.attempts + 1;
+  if (attempts >= 3) {
+    await tx.outboundContact.delete({
+      where: { id: contact.id }
+    });
+    return { removed: true, attempts };
+  }
+
+  await tx.outboundContact.update({
+    where: { id: contact.id },
+    data: {
+      queuedForCall: false,
+      status: OutboundContactStatus.PENDING,
+      attempts,
+      nextAttemptAt: new Date(Date.now() + 15 * 60 * 1000),
+      ...(lastCallLogId ? { lastCallLogId } : {})
+    }
+  });
+
+  return { removed: false, attempts };
+}
+
+async function finishOutboundContact(
+  tx: Prisma.TransactionClient,
+  contactId: string,
+  status: CallStatus,
+  lastCallLogId?: string
+) {
+  const contact = await tx.outboundContact.findUnique({
+    where: { id: contactId },
+    select: { id: true, attempts: true }
+  });
+
+  if (!contact) {
+    return null;
+  }
+
+  if (status === CallStatus.SUCCESS || status === CallStatus.ESCALATED) {
+    await tx.outboundContact.delete({
+      where: { id: contact.id }
+    });
+    return { removed: true, attempts: contact.attempts + 1 };
+  }
+
+  return releaseOutboundContactForRetry(tx, contact, lastCallLogId);
 }
 
 async function findInboundProfileByDid(did: string) {
@@ -248,6 +323,150 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
   });
 });
 
+voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res) => {
+  const parsed = outboundNextSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const now = new Date();
+  const claimed = await prisma.$transaction(
+    async (tx) => {
+      const candidates = await tx.outboundContact.findMany({
+        where: {
+          status: OutboundContactStatus.PENDING,
+          queuedForCall: false,
+          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+          user: {
+            rubleBalance: { gt: 0 },
+            profiles: {
+              some: {
+                mode: CallDirection.OUTBOUND,
+                status: ProfileStatus.ACTIVE
+              }
+            }
+          }
+        },
+        orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
+        take: 10
+      });
+
+      for (const candidate of candidates) {
+        const result = await tx.outboundContact.updateMany({
+          where: {
+            id: candidate.id,
+            status: OutboundContactStatus.PENDING,
+            queuedForCall: false
+          },
+          data: {
+            queuedForCall: true
+          }
+        });
+
+        if (result.count === 1) {
+          return candidate;
+        }
+      }
+
+      return null;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+  );
+
+  if (!claimed) {
+    res.json({ ok: true, job: null });
+    return;
+  }
+
+  const [profile, inboundProfile, contactName] = await Promise.all([
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: claimed.userId, mode: CallDirection.OUTBOUND } },
+      include: {
+        reservedNumber: true,
+        user: {
+          select: {
+            id: true,
+            phone: true,
+            numberRentExpiresAt: true,
+            rubleBalance: true,
+            telegramAccount: {
+              select: {
+                status: true,
+                chatId: true,
+                username: true
+              }
+            }
+          }
+        }
+      }
+    }),
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: claimed.userId, mode: CallDirection.INBOUND } },
+      include: { reservedNumber: true }
+    }),
+    prisma.phoneContactName.findUnique({
+      where: { userId_phone: { userId: claimed.userId, phone: claimed.phone } },
+      select: { name: true }
+    })
+  ]);
+
+  if (!profile || profile.status !== ProfileStatus.ACTIVE) {
+    await prisma.outboundContact.update({
+      where: { id: claimed.id },
+      data: { queuedForCall: false }
+    });
+    res.status(404).json({ message: "No active outbound assistant profile" });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    job: {
+      id: claimed.id,
+      phone: claimed.phone,
+      attempts: claimed.attempts,
+      nextAttemptAt: claimed.nextAttemptAt
+    },
+    profile: mapProfileToVoiceConfig(profile, {
+      direction: CallDirection.OUTBOUND,
+      outboundCallerId: inboundProfile?.reservedNumber?.number ?? null,
+      outboundContact: {
+        id: claimed.id,
+        phone: claimed.phone,
+        name: contactName?.name ?? null,
+        attempts: claimed.attempts
+      }
+    })
+  });
+});
+
+voiceInternalRouter.post("/outbound/release", requireVoiceService, async (req, res) => {
+  const parsed = outboundReleaseSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const result = await prisma.$transaction(
+    async (tx) => {
+      const contact = await tx.outboundContact.findUnique({
+        where: { id: parsed.data.outboundContactId },
+        select: { id: true, attempts: true }
+      });
+
+      if (!contact) {
+        return null;
+      }
+
+      return releaseOutboundContactForRetry(tx, contact);
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+  );
+
+  res.json({ ok: true, result, reason: parsed.data.reason ?? null });
+});
+
 voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => {
   const parsed = createCallLogSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -276,9 +495,9 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
   const summary = payload.summary || buildDefaultSummary(payload.status, customerPhone);
 
   try {
-    const log = await prisma.$transaction(
-      (tx) =>
-        createBillableCallLog(tx, {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const log = await createBillableCallLog(tx, {
           userId: profile.userId,
           direction,
           customerPhone,
@@ -287,11 +506,19 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
           summary,
           transcript: payload.transcript,
           recordingUrl: payload.recordingUrl
-        }),
+        });
+
+        const outbound =
+          direction === CallDirection.OUTBOUND && payload.outboundContactId
+            ? await finishOutboundContact(tx, payload.outboundContactId, payload.status, log.id)
+            : null;
+
+        return { log, outbound };
+      },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
     );
 
-    res.status(201).json({ ok: true, log });
+    res.status(201).json({ ok: true, log: result.log, outbound: result.outbound });
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
       res.status(402).json({ message: "Not enough balance to save a billable call log" });
