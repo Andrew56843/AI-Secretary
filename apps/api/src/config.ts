@@ -27,6 +27,7 @@ const envSchema = z.object({
   OPENAI_PROXY_URL: optionalString,
   SOCKS_PROXY_URL: optionalString,
   PROMPT_EDITOR_MODEL: z.string().trim().min(1).default("gpt-4o-mini"),
+  CALL_RECORDINGS_ROOT: z.string().trim().min(1).default("/home/andrew/ai/records"),
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()

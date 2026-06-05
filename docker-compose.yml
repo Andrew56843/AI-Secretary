@@ -46,6 +46,7 @@ services:
       OPENAI_PROXY_URL: ${OPENAI_PROXY_URL:-}
       SOCKS_PROXY_URL: ${SOCKS_PROXY_URL:-}
       PROMPT_EDITOR_MODEL: ${PROMPT_EDITOR_MODEL:-gpt-4o-mini}
+      CALL_RECORDINGS_ROOT: ${CALL_RECORDINGS_ROOT:-/home/andrew/ai/records}
     ports:
       - "4000:4000"
 

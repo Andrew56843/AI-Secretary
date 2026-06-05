@@ -8,6 +8,7 @@ import {
   deleteOutboundContact,
   disconnectGoogleCalendar,
   disconnectTelegram,
+  fetchCallRecordingBlob,
   getBilling,
   getBillingCharges,
   getCallLogs,
@@ -494,6 +495,50 @@ function renderTranscript(transcript: string) {
   );
 }
 
+function CallRecordingPlayer({ token, logId }: { token: string; logId: string }) {
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    setAudioUrl(null);
+    setLoadFailed(false);
+
+    fetchCallRecordingBlob(token, logId)
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setAudioUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadFailed(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [logId, token]);
+
+  if (loadFailed) {
+    return <span className="recording-state">Запись недоступна</span>;
+  }
+
+  if (!audioUrl) {
+    return <span className="recording-state">Загрузка записи...</span>;
+  }
+
+  return <audio controls preload="metadata" src={audioUrl} />;
+}
+
 export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [activeMode, setActiveMode] = useState<UiMode>("inbound");
   const [profiles, setProfiles] = useState<ProfilesByMode>({ inbound: null, outbound: null });
@@ -924,7 +969,13 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     setNotice(null);
 
     try {
-      await createSiteCall(token, activeMode);
+      const result = await createSiteCall(token, activeMode);
+      if (activeMode === "outbound" && result.queued) {
+        await refreshOutboundContacts(1);
+        setNotice("Тестовый исходящий звонок поставлен в очередь");
+        return;
+      }
+
       await Promise.all([refreshLogs(activeMode, 1), refreshBilling()]);
       if (billingHistoryOpen) {
         await refreshBillingHistory(1);
@@ -1068,6 +1119,73 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       setError(deleteError instanceof Error ? deleteError.message : "Не удалось удалить номер из базы");
     }
   }
+
+  useEffect(() => {
+    if (loading) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refreshLiveDashboardData() {
+      try {
+        const [
+          billingResult,
+          inboundLogs,
+          outboundLogs,
+          outboundResult,
+          contactNamesResult,
+          billingHistoryResult
+        ] = await Promise.all([
+          getBilling(token),
+          getCallLogs(token, "inbound", { page: logsPaginationByMode.inbound.page, pageSize: CALL_LOGS_PAGE_SIZE }),
+          getCallLogs(token, "outbound", { page: logsPaginationByMode.outbound.page, pageSize: CALL_LOGS_PAGE_SIZE }),
+          getOutboundContacts(token, { page: outboundPagination.page, pageSize: OUTBOUND_CONTACTS_PAGE_SIZE }),
+          getContactNames(token),
+          billingHistoryOpen
+            ? getBillingCharges(token, { page: billingHistoryPagination.page, pageSize: BILLING_HISTORY_PAGE_SIZE })
+            : Promise.resolve(null)
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setBilling(billingResult.billing);
+        setLogsByMode({ inbound: inboundLogs.logs, outbound: outboundLogs.logs });
+        setLogsPaginationByMode({ inbound: inboundLogs.pagination, outbound: outboundLogs.pagination });
+        setContacts(outboundResult.contacts);
+        setStats(outboundResult.stats);
+        setOutboundPagination(outboundResult.pagination);
+        setContactNames(contactMapFromList(contactNamesResult.contacts));
+
+        if (billingHistoryResult) {
+          setBillingHistory(billingHistoryResult.transactions);
+          setBillingHistoryPagination(billingHistoryResult.pagination);
+        }
+      } catch (refreshError) {
+        console.warn("Live dashboard refresh failed", refreshError);
+      }
+    }
+
+    const intervalId = window.setInterval(() => void refreshLiveDashboardData(), 5000);
+    const handleFocus = () => void refreshLiveDashboardData();
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [
+    billingHistoryOpen,
+    billingHistoryPagination.page,
+    loading,
+    logsPaginationByMode.inbound.page,
+    logsPaginationByMode.outbound.page,
+    outboundPagination.page,
+    token
+  ]);
 
   if (loading) {
     return (
@@ -1529,7 +1647,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                     Telegram: {telegramDelivery.status}
                   </span>
                 )}
-                {log.recordingUrl && <audio controls src={log.recordingUrl} />}
+                {log.recordingUrl && <CallRecordingPlayer token={token} logId={log.id} />}
                 {log.transcript && renderTranscript(log.transcript)}
                 <div className="log-row meta">
                   <span>{new Date(log.createdAt).toLocaleString()}</span>

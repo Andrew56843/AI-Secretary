@@ -1,7 +1,8 @@
-import { CallDirection, CallStatus, Prisma } from "@prisma/client";
+import { CallDirection, CallStatus, OutboundContactStatus, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { createBillableCallLog } from "../lib/billable-call.js";
+import { normalizePhone } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
@@ -21,6 +22,42 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
   const direction = parsed.data.direction === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND;
   const durationSeconds = 60;
 
+  if (direction === CallDirection.OUTBOUND) {
+    const profile = await prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: req.user!.userId, mode: CallDirection.OUTBOUND } },
+      select: { id: true }
+    });
+
+    if (!profile) {
+      res.status(404).json({ message: "Create outbound assistant profile first" });
+      return;
+    }
+
+    const phone = normalizePhone(req.user!.phone);
+    const contact = await prisma.outboundContact.upsert({
+      where: {
+        userId_phone: {
+          userId: req.user!.userId,
+          phone
+        }
+      },
+      update: {
+        status: OutboundContactStatus.PENDING,
+        queuedForCall: false,
+        attempts: 0,
+        nextAttemptAt: null,
+        lastCallLogId: null
+      },
+      create: {
+        userId: req.user!.userId,
+        phone
+      }
+    });
+
+    res.status(202).json({ queued: true, contact });
+    return;
+  }
+
   try {
     const log = await prisma.$transaction(
       (tx) =>
@@ -33,7 +70,7 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
           summary: "Тестовый звонок с сайта: пользователь запустил разговор из личного кабинета.",
           transcript:
             "Assi: Звонок запущен с сайта, номер вводить не нужно.\nUser: Проверяю сценарий.\nAssi: Тест завершен, транскрипт сохранен.",
-          recordingUrl: "https://example.com/calls/site-call-demo.mp3"
+          recordingUrl: undefined
         }),
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
     );

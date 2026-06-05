@@ -1,6 +1,10 @@
 import { CallDirection, CallStatus, Prisma } from "@prisma/client";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
+import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
 import { prisma } from "../lib/prisma.js";
 import { normalizePhone } from "../lib/phone.js";
@@ -24,6 +28,10 @@ const logsQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(6)
 });
 
+const callLogParamsSchema = z.object({
+  id: z.string().cuid()
+});
+
 const createMockSchema = z.object({
   direction: z.enum(["inbound", "outbound"]).default("inbound"),
   customerPhone: z.string().trim().min(8).max(24).transform(normalizePhone),
@@ -45,6 +53,48 @@ function createPagination(page: number, pageSize: number, total: number) {
     totalPages,
     hasPreviousPage: normalizedPage > 1,
     hasNextPage: normalizedPage < totalPages
+  };
+}
+
+function getRecordingContentType(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".mp3") {
+    return "audio/mpeg";
+  }
+  if (extension === ".wav") {
+    return "audio/wav";
+  }
+  return "application/octet-stream";
+}
+
+function resolveRecordingPath(recordingUrl: string | null | undefined) {
+  if (!recordingUrl || /^https?:\/\//i.test(recordingUrl)) {
+    return null;
+  }
+
+  const root = path.resolve(env.CALL_RECORDINGS_ROOT);
+  const resolved = path.resolve(recordingUrl);
+  const insideRoot = resolved === root || resolved.startsWith(`${root}${path.sep}`);
+
+  return insideRoot ? resolved : null;
+}
+
+function parseRangeHeader(rangeHeader: string | undefined, fileSize: number) {
+  if (!rangeHeader?.startsWith("bytes=")) {
+    return null;
+  }
+
+  const [rawStart, rawEnd] = rangeHeader.replace("bytes=", "").split("-");
+  const start = rawStart ? Number.parseInt(rawStart, 10) : 0;
+  const end = rawEnd ? Number.parseInt(rawEnd, 10) : fileSize - 1;
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= fileSize) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, fileSize - 1)
   };
 }
 
@@ -84,6 +134,57 @@ callLogsRouter.get("/me", requireAuth, async (req, res) => {
   });
 
   res.json({ logs, pagination });
+});
+
+callLogsRouter.get("/:id/recording", requireAuth, async (req, res) => {
+  const parsed = callLogParamsSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid call log id" });
+    return;
+  }
+
+  const log = await prisma.callLog.findFirst({
+    where: {
+      id: parsed.data.id,
+      assistantProfile: {
+        userId: req.user!.userId
+      }
+    },
+    select: { recordingUrl: true }
+  });
+
+  const recordingPath = resolveRecordingPath(log?.recordingUrl);
+  if (!recordingPath) {
+    res.status(404).json({ message: "Recording not found" });
+    return;
+  }
+
+  try {
+    const fileStat = await stat(recordingPath);
+    if (!fileStat.isFile()) {
+      res.status(404).json({ message: "Recording not found" });
+      return;
+    }
+
+    const contentType = getRecordingContentType(recordingPath);
+    const range = parseRangeHeader(req.headers.range, fileStat.size);
+
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", contentType);
+
+    if (range) {
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${fileStat.size}`);
+      res.setHeader("Content-Length", String(range.end - range.start + 1));
+      createReadStream(recordingPath, range).pipe(res);
+      return;
+    }
+
+    res.setHeader("Content-Length", String(fileStat.size));
+    createReadStream(recordingPath).pipe(res);
+  } catch {
+    res.status(404).json({ message: "Recording not found" });
+  }
 });
 
 callLogsRouter.post("/mock", requireAuth, async (req, res) => {

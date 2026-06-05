@@ -156,7 +156,7 @@ export function disconnectTelegram(token: string) {
 }
 
 export function createSiteCall(token: string, direction: UiMode) {
-  return request<{ log: CallLog }>("/api/calls/site-call", {
+  return request<{ log?: CallLog; queued?: boolean; contact?: OutboundContact }>("/api/calls/site-call", {
     token,
     method: "POST",
     body: { direction }
@@ -227,6 +227,22 @@ export function getCallLogs(token: string, direction?: UiMode, params: { page?: 
   const serializedQuery = query.toString();
   const suffix = serializedQuery ? `?${serializedQuery}` : "";
   return request<{ logs: CallLog[]; pagination: CallLogsPagination }>(`/api/call-logs/me${suffix}`, { token });
+}
+
+export async function fetchCallRecordingBlob(token: string, callLogId: string) {
+  const response = await fetch(`${API_URL}/api/call-logs/${callLogId}/recording`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const message = typeof payload.message === "string" ? payload.message : "Recording request failed";
+    throw new Error(message);
+  }
+
+  return response.blob();
 }
 
 export function getContactNames(token: string) {
