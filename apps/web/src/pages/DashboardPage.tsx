@@ -827,6 +827,14 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     }
   }
 
+  function handleVoiceChange(nextVoice: RealtimeVoice) {
+    if (nextVoice !== form.voice) {
+      stopVoicePreview();
+    }
+
+    setForm({ ...form, voice: nextVoice });
+  }
+
   async function handleVoicePreview(option: VoiceOption) {
     if (previewingVoice === option.value) {
       stopVoicePreview();
@@ -1174,7 +1182,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                       Выбор голоса
                       <select
                         value={form.voice}
-                        onChange={(event) => setForm({ ...form, voice: event.target.value as RealtimeVoice })}
+                        onChange={(event) => handleVoiceChange(event.target.value as RealtimeVoice)}
                       >
                         {VOICE_OPTIONS.map((option) => (
                           <option value={option.value} key={option.value}>
@@ -1194,7 +1202,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                         className={form.voice === option.value ? "voice-chip active" : "voice-chip"}
                         type="button"
                         key={option.value}
-                        onClick={() => setForm({ ...form, voice: option.value })}
+                        onClick={() => handleVoiceChange(option.value)}
                       >
                         {option.title}
                       </button>
