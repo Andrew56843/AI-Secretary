@@ -11,7 +11,6 @@ import { integrationsRouter } from "./routes/integrations.js";
 import { outboundRouter } from "./routes/outbound.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { voiceInternalRouter } from "./routes/voice-internal.js";
-import { voicePreviewRouter } from "./routes/voice-preview.js";
 
 const app = express();
 
@@ -36,7 +35,6 @@ app.use("/api/integrations", integrationsRouter);
 app.use("/api/profiles", profilesRouter);
 app.use("/api/call-logs", callLogsRouter);
 app.use("/api/outbound", outboundRouter);
-app.use("/api/voice-preview", voicePreviewRouter);
 app.use("/internal/voice", voiceInternalRouter);
 
 app.use((_req, res) => {

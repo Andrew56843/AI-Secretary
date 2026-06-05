@@ -3,7 +3,6 @@ import type { CSSProperties, FormEvent } from "react";
 import {
   changePassword,
   connectGoogleCalendar,
-  createVoicePreview,
   createSiteCall,
   deleteOutboundContact,
   disconnectGoogleCalendar,
@@ -109,6 +108,7 @@ const DEFAULT_STATS: OutboundStats = {
 const OUTBOUND_CONTACTS_PAGE_SIZE = 5;
 const BILLING_HISTORY_PAGE_SIZE = 5;
 const CALL_LOGS_PAGE_SIZE = 4;
+const VOICE_PREVIEW_PATH = "/voice-previews";
 
 const REALTIME_MODEL_OPTIONS: RealtimeModelOption[] = [
   {
@@ -530,7 +530,6 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [previewingVoice, setPreviewingVoice] = useState<RealtimeVoice | null>(null);
   const [form, setForm] = useState<ProfileForm>(() => defaultForm("inbound"));
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const voicePreviewUrlRef = useRef<string | null>(null);
   const voicePreviewRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -772,6 +771,12 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     try {
       const response = await topUpBalance(token, { amountRub });
       setBilling(response.billing);
+      if (response.payment?.paymentUrl) {
+        setNotice("Открываю страницу оплаты...");
+        window.location.assign(response.payment.paymentUrl);
+        return;
+      }
+
       setNotice("Баланс пополнен");
     } catch (topUpError) {
       setError(topUpError instanceof Error ? topUpError.message : "Не удалось пополнить баланс");
@@ -817,11 +822,6 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     voicePreviewAudioRef.current?.pause();
     voicePreviewAudioRef.current = null;
 
-    if (voicePreviewUrlRef.current) {
-      URL.revokeObjectURL(voicePreviewUrlRef.current);
-      voicePreviewUrlRef.current = null;
-    }
-
     if (updateState) {
       setPreviewingVoice(null);
     }
@@ -840,14 +840,8 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     setNotice(null);
 
     try {
-      const audioBlob = await createVoicePreview(token, { voice: option.value });
-      if (voicePreviewRequestIdRef.current !== requestId) {
-        return;
-      }
-
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      voicePreviewUrlRef.current = audioUrl;
+      const audio = new Audio(`${VOICE_PREVIEW_PATH}/${option.value}.mp3`);
+      audio.preload = "auto";
       voicePreviewAudioRef.current = audio;
 
       const finishPreview = () => {

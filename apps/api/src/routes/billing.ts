@@ -1,6 +1,9 @@
-import { BillingTransactionType, CallDirection, Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { BillingTransactionType, CallDirection, PaymentOrderStatus, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
+import { env } from "../config.js";
+import { createMulenPayment, isMulenPayConfigured } from "../lib/mulenpay.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
@@ -13,6 +16,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const topUpSchema = z.object({
   amountRub: z.number().int().min(100).max(500000)
+});
+
+const mulenCallbackSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  amount: z.union([z.number(), z.string()]).optional(),
+  currency: z.string().optional(),
+  uuid: z.string().min(1),
+  payment_status: z.string().min(1)
 });
 
 const historyQuerySchema = z.object({
@@ -49,6 +60,31 @@ function getNumberRentDaysLeft(expiresAt: Date | null) {
 function canRenewNumber(expiresAt: Date | null) {
   const daysLeft = getNumberRentDaysLeft(expiresAt);
   return daysLeft === null || daysLeft <= NUMBER_RENEWAL_WINDOW_DAYS;
+}
+
+function amountToKopecks(amount: number | string) {
+  const normalizedAmount = Number(amount);
+  if (!Number.isFinite(normalizedAmount)) {
+    return null;
+  }
+
+  return Math.round(normalizedAmount * 100);
+}
+
+function paymentStatusFromMulen(status: string) {
+  const normalizedStatus = status.trim().toLowerCase();
+  if (normalizedStatus === "success") {
+    return PaymentOrderStatus.PAID;
+  }
+  if (normalizedStatus === "cancel") {
+    return PaymentOrderStatus.CANCELED;
+  }
+
+  return PaymentOrderStatus.PROCESSING;
+}
+
+function createPaymentUuid() {
+  return `topup_${randomUUID()}`;
 }
 
 async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
@@ -165,6 +201,110 @@ async function getBillingState(userId: string) {
   };
 }
 
+billingRouter.post("/mulenpay/callback", async (req, res) => {
+  const parsed = mulenCallbackSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const callback = parsed.data;
+  const nextStatus = paymentStatusFromMulen(callback.payment_status);
+
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const order = await tx.paymentOrder.findUnique({
+          where: { uuid: callback.uuid }
+        });
+
+        if (!order) {
+          return { status: "NOT_FOUND" as const };
+        }
+
+        if (callback.currency && callback.currency.toLowerCase() !== "rub") {
+          return { status: "CURRENCY_MISMATCH" as const };
+        }
+
+        if (nextStatus === PaymentOrderStatus.PAID && callback.amount !== undefined) {
+          const callbackKopecks = amountToKopecks(callback.amount);
+          if (callbackKopecks === null || callbackKopecks !== order.amountRub * 100) {
+            return { status: "AMOUNT_MISMATCH" as const };
+          }
+        }
+
+        const providerPaymentId = callback.id === undefined ? order.providerPaymentId : String(callback.id);
+
+        if (nextStatus === PaymentOrderStatus.PAID) {
+          if (order.status !== PaymentOrderStatus.PAID) {
+            await tx.paymentOrder.update({
+              where: { id: order.id },
+              data: {
+                status: PaymentOrderStatus.PAID,
+                providerPaymentId,
+                rawStatus: callback.payment_status,
+                completedAt: new Date()
+              }
+            });
+
+            await tx.user.update({
+              where: { id: order.userId },
+              data: {
+                rubleBalance: { increment: order.amountRub }
+              }
+            });
+
+            await tx.billingTransaction.create({
+              data: {
+                userId: order.userId,
+                type: "TOP_UP",
+                amountSeconds: 0,
+                amountRub: order.amountRub,
+                note: `Mulen Pay top-up ${order.uuid}`
+              }
+            });
+          }
+
+          return { status: "OK" as const };
+        }
+
+        if (order.status !== PaymentOrderStatus.PAID) {
+          await tx.paymentOrder.update({
+            where: { id: order.id },
+            data: {
+              status: nextStatus,
+              providerPaymentId,
+              rawStatus: callback.payment_status,
+              completedAt: nextStatus === PaymentOrderStatus.CANCELED ? new Date() : null
+            }
+          });
+        }
+
+        return { status: "OK" as const };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    );
+
+    if (result.status === "NOT_FOUND") {
+      res.status(404).json({ message: "Payment order not found" });
+      return;
+    }
+    if (result.status === "CURRENCY_MISMATCH") {
+      res.status(400).json({ message: "Payment currency mismatch" });
+      return;
+    }
+    if (result.status === "AMOUNT_MISMATCH") {
+      res.status(400).json({ message: "Payment amount mismatch" });
+      return;
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Payment callback failed" });
+  }
+});
+
 billingRouter.get("/me", requireAuth, async (req, res) => {
   res.json({ billing: await getBillingState(req.user!.userId) });
 });
@@ -203,6 +343,59 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
   const amountRub = parsed.data.amountRub;
 
   try {
+    if (isMulenPayConfigured()) {
+      const paymentOrder = await prisma.paymentOrder.create({
+        data: {
+          userId: req.user!.userId,
+          uuid: createPaymentUuid(),
+          amountRub
+        }
+      });
+
+      try {
+        const payment = await createMulenPayment({
+          uuid: paymentOrder.uuid,
+          amountRub,
+          description: "AI Secretary balance top-up"
+        });
+
+        const updatedPaymentOrder = await prisma.paymentOrder.update({
+          where: { id: paymentOrder.id },
+          data: {
+            providerPaymentId: payment.providerPaymentId,
+            paymentUrl: payment.paymentUrl
+          }
+        });
+
+        res.status(201).json({
+          billing: await getBillingState(req.user!.userId),
+          payment: {
+            id: updatedPaymentOrder.id,
+            uuid: updatedPaymentOrder.uuid,
+            status: updatedPaymentOrder.status,
+            paymentUrl: updatedPaymentOrder.paymentUrl
+          }
+        });
+      } catch (paymentError) {
+        await prisma.paymentOrder.update({
+          where: { id: paymentOrder.id },
+          data: {
+            status: PaymentOrderStatus.FAILED,
+            rawStatus: paymentError instanceof Error ? paymentError.message.slice(0, 500) : "MULENPAY_CREATE_FAILED"
+          }
+        });
+
+        throw paymentError;
+      }
+
+      return;
+    }
+
+    if (env.NODE_ENV === "production") {
+      res.status(503).json({ message: "Payment provider is not configured" });
+      return;
+    }
+
     await prisma.$transaction(
       async (tx) => {
         await tx.user.update({
@@ -218,7 +411,7 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
             type: "TOP_UP",
             amountSeconds: 0,
             amountRub,
-            note: "Balance top-up"
+            note: "Development balance top-up"
           }
         });
       },
@@ -227,6 +420,10 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
 
     res.status(201).json({ billing: await getBillingState(req.user!.userId) });
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("MULENPAY_")) {
+      res.status(502).json({ message: "Payment provider is temporarily unavailable" });
+      return;
+    }
     if (error instanceof Error && error.message === "NO_FREE_NUMBERS") {
       res.status(409).json({ message: "No free phone numbers available now" });
       return;

@@ -35,6 +35,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production-very-secret}
       CORS_ORIGIN: http://localhost:8080
       VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN:-local-voice-service-token-change-me}
+      MULENPAY_API_KEY: ${MULENPAY_API_KEY:-}
+      MULENPAY_SECRET_KEY: ${MULENPAY_SECRET_KEY:-}
+      MULENPAY_SHOP_ID: ${MULENPAY_SHOP_ID:-}
+      MULENPAY_BASE_URL: ${MULENPAY_BASE_URL:-https://mulenpay.ru/api}
+      MULENPAY_WEBSITE_URL: ${MULENPAY_WEBSITE_URL:-http://localhost:8080}
+      MULENPAY_SIGN_WITH_UUID: ${MULENPAY_SIGN_WITH_UUID:-false}
     ports:
       - "4000:4000"
 

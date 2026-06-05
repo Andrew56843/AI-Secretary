@@ -11,6 +11,7 @@ import type {
   OutboundContact,
   OutboundPagination,
   OutboundStats,
+  PaymentTopUp,
   PhoneContactName,
   ProfilesByMode,
   ReservedPhoneNumber,
@@ -98,7 +99,7 @@ export function getBillingCharges(token: string, params: { page?: number; pageSi
 }
 
 export function topUpBalance(token: string, payload: { amountRub: number }) {
-  return request<{ billing: BillingState }>("/api/billing/top-up", {
+  return request<{ billing: BillingState; payment?: PaymentTopUp }>("/api/billing/top-up", {
     token,
     method: "POST",
     body: payload
@@ -151,25 +152,6 @@ export function disconnectTelegram(token: string) {
     token,
     method: "POST"
   });
-}
-
-export async function createVoicePreview(token: string, payload: { voice: AssistantProfile["voice"]; text?: string }) {
-  const response = await fetch(`${API_URL}/api/voice-preview`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    const errorPayload = await response.json().catch(() => ({}));
-    const message = typeof errorPayload.message === "string" ? errorPayload.message : "Не удалось создать preview голоса";
-    throw new Error(message);
-  }
-
-  return response.blob();
 }
 
 export function createSiteCall(token: string, direction: UiMode) {

@@ -22,6 +22,7 @@ model User {
   profiles              AssistantProfile[]
   outboundContacts      OutboundContact[]
   billingTransactions   BillingTransaction[]
+  paymentOrders         PaymentOrder[]
   googleAccount         GoogleAccount?
   telegramAccount       TelegramAccount?
   transcriptDeliveries  TranscriptDelivery[]
@@ -118,6 +119,26 @@ model BillingTransaction {
   @@index([userId, createdAt])
 }
 
+model PaymentOrder {
+  id                String             @id @default(cuid())
+  userId            String
+  provider          PaymentProvider    @default(MULENPAY)
+  providerPaymentId String?
+  uuid              String             @unique
+  amountRub         Int
+  status            PaymentOrderStatus @default(PENDING)
+  paymentUrl        String?
+  rawStatus         String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  completedAt       DateTime?
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([providerPaymentId])
+}
+
 model GoogleAccount {
   id          String            @id @default(cuid())
   userId      String            @unique
@@ -204,6 +225,18 @@ enum BillingTransactionType {
   TOP_UP
   NUMBER_PURCHASE
   CALL_CHARGE
+}
+
+enum PaymentProvider {
+  MULENPAY
+}
+
+enum PaymentOrderStatus {
+  PENDING
+  PROCESSING
+  PAID
+  CANCELED
+  FAILED
 }
 
 enum IntegrationStatus {

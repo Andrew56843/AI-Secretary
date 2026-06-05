@@ -144,6 +144,13 @@ export type BillingState = {
   transactions: BillingTransaction[];
 };
 
+export type PaymentTopUp = {
+  id: string;
+  uuid: string;
+  status: "PENDING" | "PROCESSING" | "PAID" | "CANCELED" | "FAILED";
+  paymentUrl?: string | null;
+};
+
 export type GoogleIntegration = {
   status: "DISCONNECTED" | "CONNECTED";
   googleEmail?: string | null;
