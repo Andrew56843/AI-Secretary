@@ -153,6 +153,25 @@ export function disconnectTelegram(token: string) {
   });
 }
 
+export async function createVoicePreview(token: string, payload: { voice: AssistantProfile["voice"]; text?: string }) {
+  const response = await fetch(`${API_URL}/api/voice-preview`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({}));
+    const message = typeof errorPayload.message === "string" ? errorPayload.message : "Не удалось создать preview голоса";
+    throw new Error(message);
+  }
+
+  return response.blob();
+}
+
 export function createSiteCall(token: string, direction: UiMode) {
   return request<{ log: CallLog }>("/api/calls/site-call", {
     token,

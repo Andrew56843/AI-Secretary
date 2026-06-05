@@ -9,6 +9,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(24).default("change-me-in-production-very-secret"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_PROXY_URL: z.string().optional(),
+  OPENAI_TTS_MODEL: z.string().default("gpt-4o-mini-tts"),
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import {
   changePassword,
   connectGoogleCalendar,
+  createVoicePreview,
   createSiteCall,
   deleteOutboundContact,
   disconnectGoogleCalendar,
@@ -528,6 +529,9 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [topUpAmount, setTopUpAmount] = useState("1000");
   const [previewingVoice, setPreviewingVoice] = useState<RealtimeVoice | null>(null);
   const [form, setForm] = useState<ProfileForm>(() => defaultForm("inbound"));
+  const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voicePreviewUrlRef = useRef<string | null>(null);
+  const voicePreviewRequestIdRef = useRef(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -586,9 +590,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
 
   useEffect(() => {
     return () => {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
+      stopVoicePreview(false);
     };
   }, []);
 
@@ -810,41 +812,59 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     }
   }
 
-  function handleVoicePreview(option: VoiceOption) {
-    if (!("speechSynthesis" in window)) {
-      setNotice("В этом браузере нет встроенного прослушивания голоса");
-      return;
+  function stopVoicePreview(updateState = true) {
+    voicePreviewRequestIdRef.current += 1;
+    voicePreviewAudioRef.current?.pause();
+    voicePreviewAudioRef.current = null;
+
+    if (voicePreviewUrlRef.current) {
+      URL.revokeObjectURL(voicePreviewUrlRef.current);
+      voicePreviewUrlRef.current = null;
     }
 
-    window.speechSynthesis.cancel();
-    if (previewingVoice === option.value) {
+    if (updateState) {
       setPreviewingVoice(null);
+    }
+  }
+
+  async function handleVoicePreview(option: VoiceOption) {
+    if (previewingVoice === option.value) {
+      stopVoicePreview();
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(`Здравствуйте. Это тестовая запись голоса ${option.title}. Я ваш AI секретарь.`);
-    const startedAt = Date.now();
-    const finishPreview = () => {
-      const remainingMs = Math.max(0, 1200 - (Date.now() - startedAt));
-      window.setTimeout(() => {
-        setPreviewingVoice((currentVoice) => (currentVoice === option.value ? null : currentVoice));
-      }, remainingMs);
-    };
-    const browserVoice =
-      window.speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith("ru")) ??
-      window.speechSynthesis.getVoices()[0];
-
-    utterance.lang = "ru-RU";
-    utterance.rate = option.previewRate;
-    utterance.pitch = option.previewPitch;
-    if (browserVoice) {
-      utterance.voice = browserVoice;
-    }
-
-    utterance.onend = finishPreview;
-    utterance.onerror = finishPreview;
+    stopVoicePreview(false);
+    const requestId = voicePreviewRequestIdRef.current;
     setPreviewingVoice(option.value);
-    window.speechSynthesis.speak(utterance);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const audioBlob = await createVoicePreview(token, { voice: option.value });
+      if (voicePreviewRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      voicePreviewUrlRef.current = audioUrl;
+      voicePreviewAudioRef.current = audio;
+
+      const finishPreview = () => {
+        if (voicePreviewAudioRef.current === audio) {
+          stopVoicePreview();
+        }
+      };
+
+      audio.onended = finishPreview;
+      audio.onerror = finishPreview;
+      await audio.play();
+    } catch (previewError) {
+      if (voicePreviewRequestIdRef.current === requestId) {
+        stopVoicePreview();
+        setError(previewError instanceof Error ? previewError.message : "Не удалось прослушать голос");
+      }
+    }
   }
 
   async function handleSiteCall() {
