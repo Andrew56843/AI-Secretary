@@ -247,13 +247,6 @@ export function importOutboundContacts(token: string, rawNumbers: string) {
   });
 }
 
-export function createOutboundDemoCall(token: string, contactId: string) {
-  return request<{ removedContactId: string; log: CallLog }>(`/api/outbound/contacts/${contactId}/mock-call`, {
-    token,
-    method: "POST"
-  });
-}
-
 export function deleteOutboundContact(token: string, contactId: string) {
   return request<void>(`/api/outbound/contacts/${contactId}`, {
     token,
