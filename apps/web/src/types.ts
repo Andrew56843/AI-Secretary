@@ -125,6 +125,7 @@ export type BillingTransaction = {
   type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE";
   amountSeconds: number;
   amountRub?: number | null;
+  amountKopecks?: number | null;
   note?: string | null;
   createdAt: string;
 };

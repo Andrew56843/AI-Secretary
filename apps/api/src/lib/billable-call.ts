@@ -6,6 +6,7 @@ import {
   TranscriptChannel,
   TranscriptDeliveryStatus
 } from "@prisma/client";
+import { legacyWholeRublesFromKopecks, rublesToKopecks } from "./money.js";
 
 type BillableCallInput = {
   userId: string;
@@ -34,6 +35,14 @@ const DEFAULT_RATE_RUB_PER_MINUTE: Record<CallDirection, number> = {
   [CallDirection.OUTBOUND]: 12
 };
 
+function calculateCallChargeKopecks(durationSeconds: number, rateRubPerMinute: number) {
+  if (durationSeconds <= 0) {
+    return 0;
+  }
+
+  return Math.ceil((durationSeconds * rublesToKopecks(rateRubPerMinute)) / 60);
+}
+
 export async function createBillableCallLog(tx: Prisma.TransactionClient, input: BillableCallInput) {
   const profile = await tx.assistantProfile.findUnique({
     where: {
@@ -49,6 +58,7 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
         select: {
           id: true,
           rubleBalance: true,
+          rubleBalanceKopecks: true,
           telegramAccount: {
             select: {
               status: true,
@@ -70,18 +80,20 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     ? profile.realtimeModel
     : DEFAULT_REALTIME_MODEL;
   const rateRubPerMinute = directionRates[realtimeModel] ?? DEFAULT_RATE_RUB_PER_MINUTE[input.direction];
-  const amountRub = Math.ceil((input.durationSeconds / 60) * rateRubPerMinute);
+  const amountKopecks = calculateCallChargeKopecks(input.durationSeconds, rateRubPerMinute);
 
-  if (profile.user.rubleBalance < amountRub) {
+  if (profile.user.rubleBalanceKopecks < amountKopecks) {
     throw new Error("INSUFFICIENT_BALANCE");
   }
+
+  const nextBalanceKopecks = profile.user.rubleBalanceKopecks - amountKopecks;
+  const legacyAmountRub = Math.ceil(amountKopecks / 100);
 
   await tx.user.update({
     where: { id: input.userId },
     data: {
-      rubleBalance: {
-        decrement: amountRub
-      }
+      rubleBalanceKopecks: nextBalanceKopecks,
+      rubleBalance: legacyWholeRublesFromKopecks(nextBalanceKopecks)
     }
   });
 
@@ -103,8 +115,9 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       userId: input.userId,
       type: BillingTransactionType.CALL_CHARGE,
       amountSeconds: -input.durationSeconds,
-      amountRub: -amountRub,
-      note: `${realtimeModel} · ${input.direction.toLowerCase()} · ${input.customerPhone}`
+      amountRub: -legacyAmountRub,
+      amountKopecks: -amountKopecks,
+      note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`
     }
   });
 

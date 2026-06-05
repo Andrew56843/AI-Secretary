@@ -2,12 +2,14 @@ import { CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { comparePassword, createToken, hashPassword } from "../lib/auth.js";
+import { rublesToKopecks } from "../lib/money.js";
 import { generateSixDigitPassword, isValidPhone, normalizePhone } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const authRouter = Router();
 const REGISTRATION_START_BALANCE_RUB = 100;
+const REGISTRATION_START_BALANCE_KOPECKS = rublesToKopecks(REGISTRATION_START_BALANCE_RUB);
 
 const phoneSchema = z
   .string()
@@ -84,6 +86,7 @@ async function createStartingBalanceGrant(tx: Prisma.TransactionClient, userId: 
       type: "FREE_GRANT",
       amountSeconds: 0,
       amountRub: REGISTRATION_START_BALANCE_RUB,
+      amountKopecks: REGISTRATION_START_BALANCE_KOPECKS,
       note: "Registration starting balance"
     }
   });
@@ -116,6 +119,7 @@ authRouter.post("/register", async (req, res) => {
             fullName,
             password: passwordHash,
             rubleBalance: REGISTRATION_START_BALANCE_RUB,
+            rubleBalanceKopecks: REGISTRATION_START_BALANCE_KOPECKS,
             minuteBalanceSeconds: 0
           }
         });

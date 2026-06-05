@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
+import { kopecksToRubles } from "../lib/money.js";
 import { normalizePhone } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -149,6 +150,7 @@ function mapProfileToVoiceConfig(
           phone: true;
           numberRentExpiresAt: true;
           rubleBalance: true;
+          rubleBalanceKopecks: true;
           telegramAccount: {
             select: {
               status: true;
@@ -212,7 +214,7 @@ function mapProfileToVoiceConfig(
     account: {
       id: profile.user.id,
       phone: profile.user.phone,
-      rubleBalance: profile.user.rubleBalance,
+      rubleBalance: kopecksToRubles(profile.user.rubleBalanceKopecks),
       numberRentExpiresAt: profile.user.numberRentExpiresAt,
       telegram:
         profile.user.telegramAccount?.status === "CONNECTED"
@@ -301,6 +303,7 @@ async function findInboundProfileByDid(did: string) {
           phone: true,
           numberRentExpiresAt: true,
           rubleBalance: true,
+          rubleBalanceKopecks: true,
           telegramAccount: {
             select: {
               status: true,
@@ -374,7 +377,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
           queuedForCall: false,
           OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
           user: {
-            rubleBalance: { gt: 0 },
+            rubleBalanceKopecks: { gt: 0 },
             profiles: {
               some: {
                 mode: CallDirection.OUTBOUND,
@@ -425,6 +428,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
             phone: true,
             numberRentExpiresAt: true,
             rubleBalance: true,
+            rubleBalanceKopecks: true,
             telegramAccount: {
               select: {
                 status: true,

@@ -3,6 +3,7 @@ import { BillingTransactionType, CallDirection, PaymentOrderStatus, Prisma } fro
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
+import { billingAmountRub, kopecksToRubles, rublesToKopecks } from "../lib/money.js";
 import { createMulenPayment, isMulenPayConfigured } from "../lib/mulenpay.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -10,6 +11,7 @@ import { requireAuth } from "../middleware/require-auth.js";
 const billingRouter = Router();
 
 const NUMBER_RENT_PRICE_RUB = 299;
+const NUMBER_RENT_PRICE_KOPECKS = rublesToKopecks(NUMBER_RENT_PRICE_RUB);
 const NUMBER_RENT_PERIOD_DAYS = 30;
 const NUMBER_RENEWAL_WINDOW_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -88,17 +90,30 @@ function createPaymentUuid() {
   return `topup_${randomUUID()}`;
 }
 
+type BillingTransactionWithMoney = {
+  amountRub: number | null;
+  amountKopecks: number | null;
+};
+
+function serializeBillingTransaction<T extends BillingTransactionWithMoney>(transaction: T) {
+  return {
+    ...transaction,
+    amountRub: billingAmountRub(transaction.amountRub, transaction.amountKopecks)
+  };
+}
+
 async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
   const user = await tx.user.findUniqueOrThrow({
     where: { id: userId },
     select: {
       rubleBalance: true,
+      rubleBalanceKopecks: true,
       numberPurchasedAt: true,
       numberRentExpiresAt: true
     }
   });
 
-  if (user.rubleBalance < NUMBER_RENT_PRICE_RUB) {
+  if (user.rubleBalanceKopecks < NUMBER_RENT_PRICE_KOPECKS) {
     throw new Error("INSUFFICIENT_BALANCE");
   }
 
@@ -147,6 +162,7 @@ async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
     where: { id: userId },
     data: {
       rubleBalance: { decrement: NUMBER_RENT_PRICE_RUB },
+      rubleBalanceKopecks: { decrement: NUMBER_RENT_PRICE_KOPECKS },
       numberPurchasedAt: user.numberPurchasedAt ?? now,
       numberRentExpiresAt
     }
@@ -158,6 +174,7 @@ async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
       type: "NUMBER_PURCHASE",
       amountSeconds: 0,
       amountRub: -NUMBER_RENT_PRICE_RUB,
+      amountKopecks: -NUMBER_RENT_PRICE_KOPECKS,
       note: `${isNewRent ? "Reserved" : "Renewed"} phone number ${number?.number ?? ""}`.trim()
     }
   });
@@ -171,6 +188,7 @@ async function getBillingState(userId: string) {
       where: { id: userId },
       select: {
         rubleBalance: true,
+        rubleBalanceKopecks: true,
         minuteBalanceSeconds: true,
         totalPurchasedSeconds: true,
         numberPurchasedAt: true,
@@ -189,7 +207,7 @@ async function getBillingState(userId: string) {
   ]);
 
   return {
-    rubleBalance: user.rubleBalance,
+    rubleBalance: kopecksToRubles(user.rubleBalanceKopecks),
     minuteBalanceSeconds: user.minuteBalanceSeconds,
     totalPurchasedSeconds: user.totalPurchasedSeconds,
     numberPurchasedAt: user.numberPurchasedAt,
@@ -198,7 +216,7 @@ async function getBillingState(userId: string) {
     numberRenewalAvailable: canRenewNumber(user.numberRentExpiresAt),
     numberRentDaysLeft: getNumberRentDaysLeft(user.numberRentExpiresAt),
     reservedNumber: inboundProfile?.reservedNumber ?? null,
-    transactions
+    transactions: transactions.map(serializeBillingTransaction)
   };
 }
 
@@ -251,7 +269,8 @@ billingRouter.post("/mulenpay/callback", async (req, res) => {
             await tx.user.update({
               where: { id: order.userId },
               data: {
-                rubleBalance: { increment: order.amountRub }
+                rubleBalance: { increment: order.amountRub },
+                rubleBalanceKopecks: { increment: rublesToKopecks(order.amountRub) }
               }
             });
 
@@ -261,6 +280,7 @@ billingRouter.post("/mulenpay/callback", async (req, res) => {
                 type: "TOP_UP",
                 amountSeconds: 0,
                 amountRub: order.amountRub,
+                amountKopecks: rublesToKopecks(order.amountRub),
                 note: `Mulen Pay top-up ${order.uuid}`
               }
             });
@@ -333,7 +353,7 @@ billingRouter.get("/charges", requireAuth, async (req, res) => {
     take: pageSize
   });
 
-  res.json({ transactions, pagination });
+  res.json({ transactions: transactions.map(serializeBillingTransaction), pagination });
 });
 
 billingRouter.post("/top-up", requireAuth, async (req, res) => {
@@ -404,7 +424,8 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
         await tx.user.update({
           where: { id: req.user!.userId },
           data: {
-            rubleBalance: { increment: amountRub }
+            rubleBalance: { increment: amountRub },
+            rubleBalanceKopecks: { increment: rublesToKopecks(amountRub) }
           }
         });
 
@@ -414,6 +435,7 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
             type: "TOP_UP",
             amountSeconds: 0,
             amountRub,
+            amountKopecks: rublesToKopecks(amountRub),
             note: "Development balance top-up"
           }
         });

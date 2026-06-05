@@ -404,10 +404,13 @@ function formatStatus(status: CallLog["status"] | OutboundContact["status"]) {
 }
 
 function formatRubles(amount: number) {
+  const hasKopecks = Math.abs(amount % 1) > Number.EPSILON;
+
   return new Intl.NumberFormat("ru-RU", {
     style: "currency",
     currency: "RUB",
-    maximumFractionDigits: 0
+    minimumFractionDigits: hasKopecks ? 2 : 0,
+    maximumFractionDigits: hasKopecks ? 2 : 0
   }).format(amount);
 }
 

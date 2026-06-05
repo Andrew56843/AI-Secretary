@@ -8,6 +8,7 @@ const RESERVED_NUMBERS = ["+79952225212", "+79952225213"];
 const OWNER_PHONE = "+79054176285";
 const OWNER_PASSWORD = "123456";
 const START_BALANCE_RUB = 1000;
+const START_BALANCE_KOPECKS = START_BALANCE_RUB * 100;
 
 const INBOUND_PROMPT =
   "Ты AI-секретарь. Отвечай на входящие звонки по-русски, говори кратко и вежливо. Собирай имя клиента, причину обращения и контактные данные. Если вопрос сложный или клиент просит человека, переведи звонок владельцу аккаунта.";
@@ -55,6 +56,7 @@ async function main() {
       fullName: "Андрей",
       password,
       rubleBalance: START_BALANCE_RUB,
+      rubleBalanceKopecks: START_BALANCE_KOPECKS,
       minuteBalanceSeconds: 0,
       totalPurchasedSeconds: 0,
       numberPurchasedAt: null,
@@ -65,6 +67,7 @@ async function main() {
       fullName: "Андрей",
       password,
       rubleBalance: START_BALANCE_RUB,
+      rubleBalanceKopecks: START_BALANCE_KOPECKS,
       minuteBalanceSeconds: 0,
       totalPurchasedSeconds: 0,
       numberPurchasedAt: null,
@@ -179,6 +182,7 @@ async function main() {
       type: BillingTransactionType.FREE_GRANT,
       amountSeconds: 0,
       amountRub: START_BALANCE_RUB,
+      amountKopecks: START_BALANCE_KOPECKS,
       note: "Starting balance"
     }
   });

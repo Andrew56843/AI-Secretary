@@ -13,6 +13,7 @@ model User {
   fullName              String?
   password              String
   rubleBalance          Int                  @default(100)
+  rubleBalanceKopecks   Int                  @default(10000)
   minuteBalanceSeconds  Int                  @default(0)
   totalPurchasedSeconds Int                  @default(0)
   numberPurchasedAt     DateTime?
@@ -111,6 +112,7 @@ model BillingTransaction {
   type          BillingTransactionType
   amountSeconds Int
   amountRub     Int?
+  amountKopecks Int?
   note          String?
   createdAt     DateTime               @default(now())
 
