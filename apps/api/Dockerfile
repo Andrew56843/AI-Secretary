@@ -2,6 +2,7 @@ FROM node:20-alpine AS base
 WORKDIR /app
 
 FROM base AS builder
+ENV DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_secretary?schema=public
 COPY package.json package-lock.json ./
 COPY apps/api/package.json ./apps/api/package.json
 COPY apps/web/package.json ./apps/web/package.json
