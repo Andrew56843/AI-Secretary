@@ -79,6 +79,12 @@ type VoiceOption = {
 
 type ScenarioTemplateId = "dentist" | "barber" | "tutor" | "auto" | "beauty" | "custom";
 
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 type ScenarioTemplate = {
   id: ScenarioTemplateId;
   title: string;
@@ -911,11 +917,31 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       if (response.telegram.botLink) {
         window.open(response.telegram.botLink, "_blank", "noopener,noreferrer");
         setNotice("Открыл Telegram для подключения");
+        void waitForTelegramConnection();
         return;
       }
       setNotice("Telegram готов к подключению");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Telegram");
+    }
+  }
+
+  async function waitForTelegramConnection() {
+    try {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await delay(2000);
+        const response = await getIntegrations(token);
+        setIntegrations(response.integrations);
+
+        if (response.integrations.telegram.status === "CONNECTED") {
+          setNotice("Telegram подключен");
+          return;
+        }
+      }
+
+      setNotice("Telegram ожидает подтверждения в боте");
+    } catch {
+      setNotice("Не удалось проверить статус Telegram");
     }
   }
 

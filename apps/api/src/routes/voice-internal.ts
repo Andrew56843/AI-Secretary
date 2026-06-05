@@ -28,6 +28,13 @@ const createCallLogSchema = z.object({
   recordingUrl: z.string().trim().max(2048).optional()
 });
 
+const telegramLinkSchema = z.object({
+  linkToken: z.string().trim().min(8).max(200),
+  chatId: z.union([z.string(), z.number()]).transform(String).pipe(z.string().trim().min(1).max(80)),
+  username: z.string().trim().min(1).max(80).optional(),
+  botUsername: z.string().trim().min(1).max(80).optional()
+});
+
 function getHeaderValue(req: Request, name: string) {
   const value = req.headers[name.toLowerCase()];
   return Array.isArray(value) ? value[0] : value;
@@ -296,6 +303,47 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
     }
     throw error;
   }
+});
+
+voiceInternalRouter.post("/telegram/link", requireVoiceService, async (req, res) => {
+  const parsed = telegramLinkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const account = await prisma.telegramAccount.findUnique({
+    where: { linkToken: parsed.data.linkToken },
+    select: { id: true, userId: true }
+  });
+
+  if (!account) {
+    res.status(404).json({ message: "Telegram link token not found" });
+    return;
+  }
+
+  const telegram = await prisma.telegramAccount.update({
+    where: { id: account.id },
+    data: {
+      status: "CONNECTED",
+      chatId: parsed.data.chatId,
+      username: parsed.data.username,
+      botUsername: parsed.data.botUsername,
+      connectedAt: new Date()
+    }
+  });
+
+  res.json({
+    ok: true,
+    telegram: {
+      id: telegram.id,
+      userId: telegram.userId,
+      status: telegram.status,
+      botUsername: telegram.botUsername,
+      username: telegram.username,
+      connectedAt: telegram.connectedAt
+    }
+  });
 });
 
 export { voiceInternalRouter };
