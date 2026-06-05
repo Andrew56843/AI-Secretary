@@ -57,7 +57,6 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       user: {
         select: {
           id: true,
-          rubleBalance: true,
           rubleBalanceKopecks: true,
           telegramAccount: {
             select: {
@@ -86,14 +85,22 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     throw new Error("INSUFFICIENT_BALANCE");
   }
 
-  const nextBalanceKopecks = profile.user.rubleBalanceKopecks - amountKopecks;
   const legacyAmountRub = Math.ceil(amountKopecks / 100);
+
+  const updatedUser = await tx.user.update({
+    where: { id: input.userId },
+    data: {
+      rubleBalanceKopecks: { decrement: amountKopecks }
+    },
+    select: {
+      rubleBalanceKopecks: true
+    }
+  });
 
   await tx.user.update({
     where: { id: input.userId },
     data: {
-      rubleBalanceKopecks: nextBalanceKopecks,
-      rubleBalance: legacyWholeRublesFromKopecks(nextBalanceKopecks)
+      rubleBalance: legacyWholeRublesFromKopecks(updatedUser.rubleBalanceKopecks)
     }
   });
 
