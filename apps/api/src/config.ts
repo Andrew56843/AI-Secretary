@@ -22,6 +22,11 @@ const envSchema = z.object({
   MULENPAY_BASE_URL: z.string().url().default("https://mulenpay.ru/api"),
   MULENPAY_WEBSITE_URL: optionalString,
   MULENPAY_SIGN_WITH_UUID: booleanFromEnv.default(false),
+  OPENAI_API_KEY: optionalString,
+  OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+  OPENAI_PROXY_URL: optionalString,
+  SOCKS_PROXY_URL: optionalString,
+  PROMPT_EDITOR_MODEL: z.string().trim().min(1).default("gpt-4o-mini"),
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()

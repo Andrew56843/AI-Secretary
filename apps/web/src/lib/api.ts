@@ -13,6 +13,7 @@ import type {
   OutboundStats,
   PaymentTopUp,
   PhoneContactName,
+  PromptEditHistoryItem,
   ProfilesByMode,
   ReservedPhoneNumber,
   TelegramIntegration,
@@ -190,6 +191,24 @@ export function updateProfileForwarding(token: string, mode: UiMode, forwardingE
     token,
     method: "PUT",
     body: { forwardingEnabled }
+  });
+}
+
+export function applyPromptCommand(
+  token: string,
+  payload: {
+    mode: UiMode;
+    title?: string;
+    businessName?: string;
+    currentPrompt: string;
+    command: string;
+    history: PromptEditHistoryItem[];
+  }
+) {
+  return request<{ updatedPrompt: string }>("/api/profiles/prompt/apply", {
+    token,
+    method: "POST",
+    body: payload
   });
 }
 

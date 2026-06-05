@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import {
+  applyPromptCommand,
   changePassword,
   connectGoogleCalendar,
   createSiteCall,
@@ -34,6 +35,7 @@ import type {
   OutboundPagination,
   OutboundStats,
   PhoneContactName,
+  PromptEditHistoryItem,
   ProfilesByMode,
   RealtimeModel,
   RealtimeVoice,
@@ -533,11 +535,16 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [promptApplying, setPromptApplying] = useState(false);
   const [topUpSaving, setTopUpSaving] = useState(false);
   const [numberRentalSaving, setNumberRentalSaving] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState("1000");
   const [previewingVoice, setPreviewingVoice] = useState<RealtimeVoice | null>(null);
   const [form, setForm] = useState<ProfileForm>(() => defaultForm("inbound"));
+  const [promptEditHistoryByMode, setPromptEditHistoryByMode] = useState<Record<UiMode, PromptEditHistoryItem[]>>({
+    inbound: [],
+    outbound: []
+  });
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const voicePreviewRequestIdRef = useRef(0);
 
@@ -640,6 +647,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   function handleTemplateSelect(templateId: ScenarioTemplateId) {
     setTemplatePickerDismissed((prev) => ({ ...prev, [activeMode]: true }));
     setTemplatePickerOpen((prev) => ({ ...prev, [activeMode]: false }));
+    setPromptEditHistoryByMode((prev) => ({ ...prev, [activeMode]: [] }));
 
     if (templateId === "custom") {
       return;
@@ -658,17 +666,50 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     }));
   }
 
-  function applyPromptRequest() {
+  async function applyPromptRequest() {
     const request = form.promptRequest.trim();
-    if (!request) {
+    if (!request || promptApplying) {
       return;
     }
 
-    setForm((prev) => ({
-      ...prev,
-      prompt: `${prev.prompt.trim()}\n\nУточнение владельца: ${request}`,
-      promptRequest: ""
-    }));
+    const mode = activeMode;
+    const currentPrompt = form.prompt;
+    setError(null);
+    setNotice(null);
+    setPromptApplying(true);
+
+    try {
+      const result = await applyPromptCommand(token, {
+        mode,
+        title: form.title,
+        businessName: form.businessName || undefined,
+        currentPrompt,
+        command: request,
+        history: promptEditHistoryByMode[mode]
+      });
+
+      setForm((prev) => ({
+        ...prev,
+        prompt: result.updatedPrompt,
+        promptRequest: ""
+      }));
+      setPromptEditHistoryByMode((prev) => ({
+        ...prev,
+        [mode]: [
+          ...prev[mode],
+          {
+            command: request,
+            beforePrompt: currentPrompt,
+            afterPrompt: result.updatedPrompt
+          }
+        ].slice(-8)
+      }));
+      setNotice("Промпт обновлён. Сохраните сценарий, чтобы изменения начали использоваться в звонках.");
+    } catch (applyError) {
+      setError(applyError instanceof Error ? applyError.message : "Не удалось применить команду к промпту");
+    } finally {
+      setPromptApplying(false);
+    }
   }
 
   function openContactNameModal(phone: string) {
@@ -1259,11 +1300,17 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                       onChange={(event) => setForm({ ...form, promptRequest: event.target.value })}
                       placeholder="Например: отвечай короче, чаще уточняй адрес, не обещай скидки"
                       rows={3}
+                      disabled={promptApplying}
                     />
                   </label>
 
-                  <button className="outline-btn" type="button" onClick={applyPromptRequest}>
-                    Применить к промпту
+                  <button
+                    className="outline-btn"
+                    type="button"
+                    onClick={() => void applyPromptRequest()}
+                    disabled={promptApplying || !form.promptRequest.trim()}
+                  >
+                    {promptApplying ? "Применяется..." : "Применить к промпту"}
                   </button>
                 </div>
               </section>

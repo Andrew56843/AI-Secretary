@@ -174,3 +174,9 @@ export type IntegrationsState = {
 };
 
 export type UiMode = "inbound" | "outbound";
+
+export type PromptEditHistoryItem = {
+  command: string;
+  beforePrompt: string;
+  afterPrompt: string;
+};

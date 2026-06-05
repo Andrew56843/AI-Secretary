@@ -20,6 +20,11 @@ services:
       MULENPAY_BASE_URL: ${MULENPAY_BASE_URL:-https://mulenpay.ru/api}
       MULENPAY_WEBSITE_URL: ${MULENPAY_WEBSITE_URL:-}
       MULENPAY_SIGN_WITH_UUID: ${MULENPAY_SIGN_WITH_UUID:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_PROXY_URL: ${OPENAI_PROXY_URL:-}
+      SOCKS_PROXY_URL: ${SOCKS_PROXY_URL:-}
+      PROMPT_EDITOR_MODEL: ${PROMPT_EDITOR_MODEL:-gpt-4o-mini}
     networks:
       - default
       - coolify

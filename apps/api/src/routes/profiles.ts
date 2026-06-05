@@ -1,6 +1,8 @@
 import { CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
+import { env } from "../config.js";
+import { OpenAiRequestError, postOpenAiJson } from "../lib/openai.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
@@ -30,6 +32,39 @@ const updateForwardingSchema = z.object({
   forwardingEnabled: z.boolean()
 });
 
+const promptEditHistoryItemSchema = z.object({
+  command: z.string().trim().min(1).max(1200),
+  beforePrompt: z.string().trim().max(6000).optional(),
+  afterPrompt: z.string().trim().min(1).max(6000)
+});
+
+const applyPromptEditSchema = z.object({
+  mode: z.enum(["inbound", "outbound"]).transform((value) =>
+    value === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND
+  ),
+  title: z.string().trim().max(100).optional(),
+  businessName: z.string().trim().max(120).optional(),
+  currentPrompt: z.string().trim().max(6000),
+  command: z.string().trim().min(1).max(1200),
+  history: z.array(promptEditHistoryItemSchema).max(12).default([])
+});
+
+const promptEditorResponseSchema = z.object({
+  updatedPrompt: z.string().trim().min(20).max(6000)
+});
+
+const openAiChatCompletionSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        message: z.object({
+          content: z.string().nullable().optional()
+        })
+      })
+    )
+    .min(1)
+});
+
 function includeProfileRelations() {
   return {
     reservedNumber: true,
@@ -37,6 +72,45 @@ function includeProfileRelations() {
       select: { callLogs: true }
     }
   } satisfies Prisma.AssistantProfileInclude;
+}
+
+function buildPromptEditorRequest(payload: z.infer<typeof applyPromptEditSchema>) {
+  const history = payload.history.slice(-8).map((item) => ({
+    command: item.command,
+    beforePrompt: item.beforePrompt,
+    afterPrompt: item.afterPrompt
+  }));
+
+  return {
+    model: env.PROMPT_EDITOR_MODEL,
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: [
+          "Ты редактор промптов для AI-секретаря.",
+          "На входе есть текущий промпт, новая команда пользователя и история прошлых команд этой страницы.",
+          "Считай новую команду продолжением истории. Например, если раньше просили сделать тон мягче, команда 'ещё мягче' усиливает именно это изменение.",
+          "Верни обновлённый рабочий промпт целиком, а не патч и не объяснение.",
+          "Сохраняй важные факты, ограничения, цены, адреса, телефоны и правила, если новая команда явно не просит их изменить.",
+          "Не добавляй markdown, комментарии и пояснения.",
+          "Ответь строго JSON-объектом вида {\"updatedPrompt\":\"...\"}."
+        ].join("\n")
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          mode: payload.mode,
+          title: payload.title ?? "",
+          businessName: payload.businessName ?? "",
+          currentPrompt: payload.currentPrompt,
+          command: payload.command,
+          history
+        })
+      }
+    ]
+  };
 }
 
 function resolveForwardingRules(
@@ -61,6 +135,54 @@ function resolveForwardingRules(
     forwardingOnStalemate
   };
 }
+
+profilesRouter.post("/prompt/apply", requireAuth, async (req, res) => {
+  const parsed = applyPromptEditSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const completion = await postOpenAiJson("/chat/completions", buildPromptEditorRequest(parsed.data));
+    const parsedCompletion = openAiChatCompletionSchema.safeParse(completion);
+    const content = parsedCompletion.success ? parsedCompletion.data.choices[0]?.message.content : null;
+
+    if (!content) {
+      res.status(502).json({ message: "OpenAI не вернул обновлённый промпт" });
+      return;
+    }
+
+    const result = promptEditorResponseSchema.safeParse(JSON.parse(content));
+    if (!result.success) {
+      res.status(502).json({ message: "OpenAI вернул некорректный промпт" });
+      return;
+    }
+
+    res.json({ updatedPrompt: result.data.updatedPrompt });
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      res.status(502).json({ message: "OpenAI вернул некорректный JSON" });
+      return;
+    }
+
+    if (error instanceof OpenAiRequestError) {
+      if (error.status === 503) {
+        res.status(503).json({ message: "OPENAI_API_KEY не настроен для API сайта" });
+        return;
+      }
+
+      console.error("Prompt editor OpenAI error", {
+        status: error.status,
+        error: error.payload?.error
+      });
+      res.status(502).json({ message: "Не удалось применить команду к промпту" });
+      return;
+    }
+
+    throw error;
+  }
+});
 
 profilesRouter.get("/numbers/free", requireAuth, async (_req, res) => {
   const numbers = await prisma.reservedPhoneNumber.findMany({
