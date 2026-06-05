@@ -581,6 +581,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [promptApplying, setPromptApplying] = useState(false);
+  const [testingCall, setTestingCall] = useState(false);
   const [topUpSaving, setTopUpSaving] = useState(false);
   const [numberRentalSaving, setNumberRentalSaving] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState("1000");
@@ -968,6 +969,23 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     setError(null);
     setNotice(null);
 
+    if (saving || testingCall) {
+      return;
+    }
+
+    if (!scenarioReady) {
+      setError("Сначала заполните greeting и промпт сценария");
+      return;
+    }
+
+    if (hasScenarioChanges) {
+      setError("Сначала сохраните изменения сценария, чтобы тестовый звонок использовал актуальный промпт");
+      return;
+    }
+
+    setTestingCall(true);
+    setNotice(activeMode === "outbound" ? "Ставлю тестовый исходящий звонок в очередь..." : "Создаю тестовый лог звонка...");
+
     try {
       const result = await createSiteCall(token, activeMode);
       if (activeMode === "outbound" && result.queued) {
@@ -983,6 +1001,8 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       setNotice("Тестовый звонок записан в логи");
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Не удалось создать тестовый звонок");
+    } finally {
+      setTestingCall(false);
     }
   }
 
@@ -1489,17 +1509,17 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 <button
                   className="outline-btn"
                   type="button"
-                  disabled={saving || hasScenarioChanges || !scenarioReady}
+                  disabled={saving || testingCall}
                   title={
-                    !scenarioReady
-                      ? "Сначала заполните greeting и промпт"
-                      : hasScenarioChanges
-                        ? "Сначала сохраните изменения сценария"
+                    hasScenarioChanges
+                      ? "Нажмите, чтобы увидеть подсказку"
+                      : !scenarioReady
+                        ? "Нажмите, чтобы увидеть подсказку"
                         : undefined
                   }
                   onClick={handleSiteCall}
                 >
-                  Тест звонок
+                  {testingCall ? "Запускаю..." : activeMode === "outbound" ? "Тест исходящего звонка" : "Тест звонок"}
                 </button>
               </div>
             </div>
