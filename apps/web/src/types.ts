@@ -95,6 +95,7 @@ export type PhoneContactName = {
 export type OutboundContact = {
   id: string;
   phone: string;
+  callMode: UiMode;
   status: "PENDING" | "CALLED" | "FAILED";
   queuedForCall: boolean;
   attempts: number;

@@ -92,6 +92,7 @@ model OutboundContact {
   id        String                @id @default(cuid())
   userId    String
   phone     String
+  callMode  CallDirection         @default(OUTBOUND)
   status    OutboundContactStatus @default(PENDING)
   queuedForCall Boolean             @default(false)
   attempts  Int                   @default(0)
@@ -102,7 +103,7 @@ model OutboundContact {
 
   user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, phone])
+  @@unique([userId, phone, callMode])
   @@index([userId, status])
 }
 

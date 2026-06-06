@@ -993,14 +993,20 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     setNotice(
       activeMode === "outbound"
         ? "Ставлю тестовый исходящий звонок в очередь..."
-        : "Создаю тестовый лог без телефонного звонка..."
+        : "Ставлю тестовый входящий звонок в очередь..."
     );
 
     try {
       const result = await createSiteCall(token, activeMode);
-      if (activeMode === "outbound" && result.queued) {
-        await refreshOutboundContacts(1);
-        setNotice("Тестовый исходящий звонок поставлен в очередь");
+      if (result.queued) {
+        if (activeMode === "outbound") {
+          await refreshOutboundContacts(1);
+        }
+        setNotice(
+          activeMode === "outbound"
+            ? "Тестовый исходящий звонок поставлен в очередь"
+            : "Тестовый входящий сценарий поставлен в очередь, сейчас наберу ваш номер"
+        );
         return;
       }
 
@@ -1008,7 +1014,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       if (billingHistoryOpen) {
         await refreshBillingHistory(1);
       }
-      setNotice(activeMode === "outbound" ? "Тестовый звонок записан в логи" : "Тестовый лог создан без телефонного звонка");
+      setNotice("Тестовый звонок записан в логи");
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Не удалось создать тестовый звонок");
     } finally {
@@ -1525,19 +1531,15 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                       ? "Нажмите, чтобы увидеть подсказку"
                       : !scenarioReady
                         ? "Нажмите, чтобы увидеть подсказку"
-                        : activeMode === "inbound"
-                          ? "Создает тестовый лог без фактического телефонного звонка"
-                          : undefined
+                        : undefined
                   }
                   onClick={handleSiteCall}
                 >
                   {testingCall
-                    ? activeMode === "outbound"
-                      ? "Запускаю..."
-                      : "Создаю лог..."
+                    ? "Запускаю..."
                     : activeMode === "outbound"
                       ? "Тест исходящего звонка"
-                      : "Тестовый лог"}
+                      : "Тест входящего звонка"}
                 </button>
               </div>
             </div>

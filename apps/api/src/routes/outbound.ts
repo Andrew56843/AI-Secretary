@@ -68,7 +68,7 @@ outboundRouter.get("/contacts", requireAuth, async (req, res) => {
     return;
   }
 
-  const where: Prisma.OutboundContactWhereInput = { userId: req.user!.userId };
+  const where: Prisma.OutboundContactWhereInput = { userId: req.user!.userId, callMode: CallDirection.OUTBOUND };
   const { pageSize } = parsed.data;
 
   const [total, pending] = await Promise.all([
@@ -121,13 +121,14 @@ outboundRouter.post("/contacts/import", requireAuth, async (req, res) => {
   await prisma.outboundContact.createMany({
     data: phones.map((phone) => ({
       userId: req.user!.userId,
-      phone
+      phone,
+      callMode: CallDirection.OUTBOUND
     })),
     skipDuplicates: true
   });
 
   const contacts = await prisma.outboundContact.findMany({
-    where: { userId: req.user!.userId },
+    where: { userId: req.user!.userId, callMode: CallDirection.OUTBOUND },
     orderBy: { createdAt: "desc" },
     take: 200
   });
@@ -148,7 +149,8 @@ outboundRouter.delete("/contacts/:id", requireAuth, async (req, res) => {
   const contact = await prisma.outboundContact.findFirst({
     where: {
       id: parsedParams.data.id,
-      userId: req.user!.userId
+      userId: req.user!.userId,
+      callMode: CallDirection.OUTBOUND
     }
   });
 
@@ -174,7 +176,8 @@ outboundRouter.post("/contacts/:id/mock-call", requireAuth, async (req, res) => 
   const contact = await prisma.outboundContact.findFirst({
     where: {
       id: parsedParams.data.id,
-      userId: req.user!.userId
+      userId: req.user!.userId,
+      callMode: CallDirection.OUTBOUND
     }
   });
 

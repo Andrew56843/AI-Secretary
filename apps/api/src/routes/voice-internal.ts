@@ -395,21 +395,20 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
-  const [inboundProfile, outboundContact] =
+  const [inboundProfile, outboundContact] = await Promise.all([
     direction === CallDirection.OUTBOUND
-      ? await Promise.all([
-          prisma.assistantProfile.findUnique({
-            where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
-            include: { reservedNumber: true }
-          }),
-          parsed.data.outboundContactId
-            ? prisma.outboundContact.findFirst({
-                where: { id: parsed.data.outboundContactId, userId: profile.userId },
-                select: { id: true, phone: true, attempts: true }
-              })
-            : null
-        ])
-      : [null, null];
+      ? prisma.assistantProfile.findUnique({
+          where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
+          include: { reservedNumber: true }
+        })
+      : null,
+    parsed.data.outboundContactId
+      ? prisma.outboundContact.findFirst({
+          where: { id: parsed.data.outboundContactId, userId: profile.userId },
+          select: { id: true, phone: true, attempts: true }
+        })
+      : null
+  ]);
 
   const contactName = outboundContact
     ? await prisma.phoneContactName.findUnique({
@@ -456,14 +455,22 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
           queuedForCall: false,
           OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
           user: {
-            rubleBalanceKopecks: { gt: 0 },
-            profiles: {
-              some: {
-                mode: CallDirection.OUTBOUND,
-                status: ProfileStatus.ACTIVE
-              }
+            rubleBalanceKopecks: { gt: 0 }
+          },
+          AND: [
+            {
+              OR: [
+                {
+                  callMode: CallDirection.OUTBOUND,
+                  user: { profiles: { some: { mode: CallDirection.OUTBOUND, status: ProfileStatus.ACTIVE } } }
+                },
+                {
+                  callMode: CallDirection.INBOUND,
+                  user: { profiles: { some: { mode: CallDirection.INBOUND, status: ProfileStatus.ACTIVE } } }
+                }
+              ]
             }
-          }
+          ]
         },
         orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
         take: 10
@@ -496,9 +503,11 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     return;
   }
 
+  const callMode = claimed.callMode ?? CallDirection.OUTBOUND;
+
   const [profile, inboundProfile, contactName] = await Promise.all([
     prisma.assistantProfile.findUnique({
-      where: { userId_mode: { userId: claimed.userId, mode: CallDirection.OUTBOUND } },
+      where: { userId_mode: { userId: claimed.userId, mode: callMode } },
       include: {
         reservedNumber: true,
         user: {
@@ -534,7 +543,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
       where: { id: claimed.id },
       data: { queuedForCall: false }
     });
-    res.status(404).json({ message: "No active outbound assistant profile" });
+    res.status(404).json({ message: "No active assistant profile for queued call mode" });
     return;
   }
 
@@ -547,8 +556,8 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
       nextAttemptAt: claimed.nextAttemptAt
     },
     profile: mapProfileToVoiceConfig(profile, {
-      direction: CallDirection.OUTBOUND,
-      outboundCallerId: inboundProfile?.reservedNumber?.number ?? null,
+      direction: callMode,
+      outboundCallerId: profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null,
       outboundContact: {
         id: claimed.id,
         phone: claimed.phone,
@@ -627,7 +636,7 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
         });
 
         const outbound =
-          direction === CallDirection.OUTBOUND && payload.outboundContactId
+          payload.outboundContactId
             ? await finishOutboundContact(tx, payload.outboundContactId, payload.status, log.id)
             : null;
 
