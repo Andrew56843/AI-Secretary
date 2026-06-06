@@ -11,11 +11,18 @@ import { prisma } from "../lib/prisma.js";
 
 const voiceInternalRouter = Router();
 
-const resolveCallSchema = z.object({
-  did: z.string().trim().min(1).max(64),
-  callerId: z.string().trim().max(64).optional(),
-  uuid: z.string().trim().max(80).optional()
-});
+const resolveCallSchema = z
+  .object({
+    did: z.string().trim().min(1).max(64).optional(),
+    callerId: z.string().trim().max(64).optional(),
+    uuid: z.string().trim().max(80).optional(),
+    direction: z.enum(["INBOUND", "OUTBOUND"]).optional(),
+    assistantProfileId: z.string().trim().min(1).optional(),
+    outboundContactId: z.string().trim().min(1).optional()
+  })
+  .refine((value) => value.did || value.assistantProfileId, {
+    message: "Either did or assistantProfileId is required"
+  });
 
 const createCallLogSchema = z.object({
   assistantProfileId: z.string().trim().min(1).optional(),
@@ -317,6 +324,35 @@ async function findInboundProfileByDid(did: string) {
   });
 }
 
+async function findActiveProfileById(assistantProfileId: string, direction?: CallDirection) {
+  return prisma.assistantProfile.findFirst({
+    where: {
+      id: assistantProfileId,
+      status: ProfileStatus.ACTIVE,
+      ...(direction ? { mode: direction } : {})
+    },
+    include: {
+      reservedNumber: true,
+      user: {
+        select: {
+          id: true,
+          phone: true,
+          numberRentExpiresAt: true,
+          rubleBalance: true,
+          rubleBalanceKopecks: true,
+          telegramAccount: {
+            select: {
+              status: true,
+              chatId: true,
+              username: true
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
 function buildDefaultSummary(status: CallStatus, customerPhone: string) {
   if (status === CallStatus.ESCALATED) {
     return `Call from ${customerPhone} was escalated to the account owner.`;
@@ -338,7 +374,16 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
-  const profile = await findInboundProfileByDid(parsed.data.did);
+  const direction =
+    parsed.data.direction === "OUTBOUND"
+      ? CallDirection.OUTBOUND
+      : parsed.data.direction === "INBOUND"
+        ? CallDirection.INBOUND
+        : undefined;
+  const profile = parsed.data.assistantProfileId
+    ? await findActiveProfileById(parsed.data.assistantProfileId, direction)
+    : await findInboundProfileByDid(parsed.data.did!);
+
   if (!profile) {
     res.status(404).json({ message: "No active assistant profile for this DID" });
     return;
@@ -350,14 +395,48 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
+  const [inboundProfile, outboundContact] =
+    direction === CallDirection.OUTBOUND
+      ? await Promise.all([
+          prisma.assistantProfile.findUnique({
+            where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
+            include: { reservedNumber: true }
+          }),
+          parsed.data.outboundContactId
+            ? prisma.outboundContact.findFirst({
+                where: { id: parsed.data.outboundContactId, userId: profile.userId },
+                select: { id: true, phone: true, attempts: true }
+              })
+            : null
+        ])
+      : [null, null];
+
+  const contactName = outboundContact
+    ? await prisma.phoneContactName.findUnique({
+        where: { userId_phone: { userId: profile.userId, phone: outboundContact.phone } },
+        select: { name: true }
+      })
+    : null;
+
   res.json({
     ok: true,
     call: {
       uuid: parsed.data.uuid ?? null,
-      did: parsed.data.did,
+      did: parsed.data.did ?? profile.reservedNumber?.number ?? null,
       callerId: parsed.data.callerId ?? null
     },
-    profile: mapProfileToVoiceConfig(profile)
+    profile: mapProfileToVoiceConfig(profile, {
+      direction,
+      outboundCallerId: inboundProfile?.reservedNumber?.number ?? null,
+      outboundContact: outboundContact
+        ? {
+            id: outboundContact.id,
+            phone: outboundContact.phone,
+            name: contactName?.name ?? null,
+            attempts: outboundContact.attempts
+          }
+        : undefined
+    })
   });
 });
 

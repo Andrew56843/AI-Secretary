@@ -20,7 +20,7 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
   }
 
   const direction = parsed.data.direction === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND;
-  const durationSeconds = 60;
+  const durationSeconds = 1;
 
   if (direction === CallDirection.OUTBOUND) {
     const profile = await prisma.assistantProfile.findUnique({
