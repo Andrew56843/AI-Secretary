@@ -67,9 +67,9 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
           customerPhone: req.user!.phone,
           status: CallStatus.SUCCESS,
           durationSeconds,
-          summary: "Тестовый звонок с сайта: пользователь запустил разговор из личного кабинета.",
+          summary: "Тестовый лог с сайта: пользователь проверил сценарий из личного кабинета без телефонного звонка.",
           transcript:
-            "Assi: Звонок запущен с сайта, номер вводить не нужно.\nUser: Проверяю сценарий.\nAssi: Тест завершен, транскрипт сохранен.",
+            "Assi: Тестовый лог запущен с сайта, номер вводить не нужно.\nUser: Проверяю сценарий.\nAssi: Тест завершен, транскрипт сохранен.",
           recordingUrl: undefined
         }),
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }

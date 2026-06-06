@@ -499,15 +499,15 @@ function renderTranscript(transcript: string) {
 }
 
 function CallRecordingPlayer({ token, logId }: { token: string; logId: string }) {
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [recording, setRecording] = useState<{ logId: string; audioUrl: string | null; loadFailed: boolean }>({
+    logId,
+    audioUrl: null,
+    loadFailed: false
+  });
 
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
-
-    setAudioUrl(null);
-    setLoadFailed(false);
 
     fetchCallRecordingBlob(token, logId)
       .then((blob) => {
@@ -515,11 +515,11 @@ function CallRecordingPlayer({ token, logId }: { token: string; logId: string })
           return;
         }
         objectUrl = URL.createObjectURL(blob);
-        setAudioUrl(objectUrl);
+        setRecording({ logId, audioUrl: objectUrl, loadFailed: false });
       })
       .catch(() => {
         if (!cancelled) {
-          setLoadFailed(true);
+          setRecording({ logId, audioUrl: null, loadFailed: true });
         }
       });
 
@@ -530,6 +530,9 @@ function CallRecordingPlayer({ token, logId }: { token: string; logId: string })
       }
     };
   }, [logId, token]);
+
+  const audioUrl = recording.logId === logId ? recording.audioUrl : null;
+  const loadFailed = recording.logId === logId ? recording.loadFailed : false;
 
   if (loadFailed) {
     return <span className="recording-state">Запись недоступна</span>;
@@ -987,7 +990,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     }
 
     setTestingCall(true);
-    setNotice(activeMode === "outbound" ? "Ставлю тестовый исходящий звонок в очередь..." : "Создаю тестовый лог звонка...");
+    setNotice(
+      activeMode === "outbound"
+        ? "Ставлю тестовый исходящий звонок в очередь..."
+        : "Создаю тестовый лог без телефонного звонка..."
+    );
 
     try {
       const result = await createSiteCall(token, activeMode);
@@ -1001,7 +1008,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       if (billingHistoryOpen) {
         await refreshBillingHistory(1);
       }
-      setNotice("Тестовый звонок записан в логи");
+      setNotice(activeMode === "outbound" ? "Тестовый звонок записан в логи" : "Тестовый лог создан без телефонного звонка");
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Не удалось создать тестовый звонок");
     } finally {
@@ -1518,11 +1525,19 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                       ? "Нажмите, чтобы увидеть подсказку"
                       : !scenarioReady
                         ? "Нажмите, чтобы увидеть подсказку"
-                        : undefined
+                        : activeMode === "inbound"
+                          ? "Создает тестовый лог без фактического телефонного звонка"
+                          : undefined
                   }
                   onClick={handleSiteCall}
                 >
-                  {testingCall ? "Запускаю..." : activeMode === "outbound" ? "Тест исходящего звонка" : "Тест звонок"}
+                  {testingCall
+                    ? activeMode === "outbound"
+                      ? "Запускаю..."
+                      : "Создаю лог..."
+                    : activeMode === "outbound"
+                      ? "Тест исходящего звонка"
+                      : "Тестовый лог"}
                 </button>
               </div>
             </div>
