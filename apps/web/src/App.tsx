@@ -4,6 +4,7 @@ import { clearToken, clearUser, getToken, getUser, setToken, setUser } from "./l
 import { AuthPage } from "./pages/AuthPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LandingPage } from "./pages/LandingPage";
+import { LegalPage } from "./pages/LegalPage";
 import type { AuthResponse, AuthUser } from "./types";
 
 export default function App() {
@@ -42,6 +43,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={token ? <Navigate to="/dashboard" replace /> : <LandingPage onAuthorized={handleAuthorized} />} />
+        <Route path="/privacy" element={<LegalPage kind="privacy" />} />
+        <Route path="/terms" element={<LegalPage kind="terms" />} />
         <Route
           path="/auth"
           element={token ? <Navigate to="/dashboard" replace /> : <AuthPage onAuthorized={handleAuthorized} />}
