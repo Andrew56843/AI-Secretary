@@ -22,7 +22,31 @@ import type {
   UiMode
 } from "../types";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+const legacyServerApiUrl = "93.77.186.23:14000";
+
+function resolveApiUrl() {
+  const configuredUrl = import.meta.env.VITE_API_URL;
+
+  if (configuredUrl === undefined) {
+    return "http://localhost:4000";
+  }
+
+  const trimmedUrl = configuredUrl.trim();
+  if (!trimmedUrl) {
+    return "";
+  }
+
+  if (typeof window !== "undefined") {
+    const openedOnLegacyIp = window.location.host === "93.77.186.23:18080";
+    if (!openedOnLegacyIp && trimmedUrl.includes(legacyServerApiUrl)) {
+      return "";
+    }
+  }
+
+  return trimmedUrl;
+}
+
+const API_URL = resolveApiUrl();
 
 type ApiRequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
