@@ -24,6 +24,7 @@ async function main() {
       }
     }
   });
+  await prisma.phoneVerificationRequest.deleteMany({});
 
   for (const number of RESERVED_NUMBERS) {
     await prisma.reservedPhoneNumber.upsert({

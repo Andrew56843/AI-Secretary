@@ -13,6 +13,8 @@ import type {
   OutboundStats,
   PaymentTopUp,
   PhoneContactName,
+  PhoneVerificationStartResponse,
+  PhoneVerificationStatusResponse,
   PromptEditHistoryItem,
   ProfilesByMode,
   ReservedPhoneNumber,
@@ -49,7 +51,7 @@ async function request<T>(path: string, options: ApiRequestOptions = {}) {
 }
 
 export function register(payload: { phone: string; fullName?: string }) {
-  return request<AuthResponse>("/api/auth/register", { method: "POST", body: payload });
+  return request<PhoneVerificationStartResponse>("/api/auth/register", { method: "POST", body: payload });
 }
 
 export function login(payload: { phone: string; password: string }) {
@@ -57,10 +59,14 @@ export function login(payload: { phone: string; password: string }) {
 }
 
 export function forgotPassword(payload: { phone: string }) {
-  return request<Pick<AuthResponse, "issuedPassword" | "delivery">>("/api/auth/forgot-password", {
+  return request<PhoneVerificationStartResponse>("/api/auth/forgot-password", {
     method: "POST",
     body: payload
   });
+}
+
+export function getPhoneVerification(id: string) {
+  return request<PhoneVerificationStatusResponse>(`/api/auth/phone-verification/${encodeURIComponent(id)}`);
 }
 
 export function changePassword(token: string, password: string) {

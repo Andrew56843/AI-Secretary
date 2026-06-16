@@ -20,6 +20,8 @@ services:
       SOCKS_PROXY_URL: ${SOCKS_PROXY_URL:-}
       PROMPT_EDITOR_MODEL: ${PROMPT_EDITOR_MODEL:-gpt-4o-mini}
       CALL_RECORDINGS_ROOT: ${CALL_RECORDINGS_ROOT:-/home/andrew/ai/records}
+      PHONE_VERIFICATION_CALL_NUMBER: ${PHONE_VERIFICATION_CALL_NUMBER:-+79952225212}
+      PHONE_VERIFICATION_TTL_SECONDS: ${PHONE_VERIFICATION_TTL_SECONDS:-300}
     volumes:
       - /home/andrew/ai/records:/home/andrew/ai/records:ro
     networks:

@@ -1,15 +1,17 @@
-import { CallDirection, Prisma } from "@prisma/client";
+import { PhoneVerificationPurpose, PhoneVerificationStatus } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { comparePassword, createToken, hashPassword } from "../lib/auth.js";
-import { rublesToKopecks } from "../lib/money.js";
-import { generateSixDigitPassword, isValidPhone, normalizePhone } from "../lib/phone.js";
+import { isValidPhone, normalizePhone } from "../lib/phone.js";
+import {
+  getFreshPhoneVerificationRequest,
+  publicPhoneVerificationRequest,
+  startPhoneVerificationRequest
+} from "../lib/phone-verification.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const authRouter = Router();
-const REGISTRATION_START_BALANCE_RUB = 100;
-const REGISTRATION_START_BALANCE_KOPECKS = rublesToKopecks(REGISTRATION_START_BALANCE_RUB);
 
 const phoneSchema = z
   .string()
@@ -33,6 +35,10 @@ const changePasswordSchema = z.object({
   password: passwordSchema
 });
 
+const verificationParamsSchema = z.object({
+  id: z.string().trim().min(1).max(80)
+});
+
 function publicUser(user: { id: string; phone: string; fullName: string | null; createdAt?: Date }) {
   return {
     id: user.id,
@@ -40,56 +46,6 @@ function publicUser(user: { id: string; phone: string; fullName: string | null; 
     fullName: user.fullName,
     createdAt: user.createdAt
   };
-}
-
-async function createDefaultProfiles(tx: Prisma.TransactionClient, userId: string, phone: string) {
-  await tx.assistantProfile.createMany({
-    data: [
-      {
-        userId,
-        mode: CallDirection.INBOUND,
-        title: "Входящие звонки",
-        businessName: "Мой бизнес",
-        prompt: "",
-        greetingText: "",
-        forwardingPhone: phone,
-        forwardingEnabled: true,
-        forwardingOnComplete: true,
-        forwardingOnStalemate: true,
-        realtimeModel: "gpt-realtime-2",
-        voice: "alloy",
-        maxDialogSeconds: 120
-      },
-      {
-        userId,
-        mode: CallDirection.OUTBOUND,
-        title: "Исходящие звонки",
-        businessName: "Мой бизнес",
-        prompt: "",
-        greetingText: "",
-        forwardingPhone: phone,
-        forwardingEnabled: true,
-        forwardingOnComplete: true,
-        forwardingOnStalemate: true,
-        realtimeModel: "gpt-realtime-2",
-        voice: "alloy",
-        maxDialogSeconds: 90
-      }
-    ]
-  });
-}
-
-async function createStartingBalanceGrant(tx: Prisma.TransactionClient, userId: string) {
-  await tx.billingTransaction.create({
-    data: {
-      userId,
-      type: "FREE_GRANT",
-      amountSeconds: 0,
-      amountRub: REGISTRATION_START_BALANCE_RUB,
-      amountKopecks: REGISTRATION_START_BALANCE_KOPECKS,
-      note: "Registration starting balance"
-    }
-  });
 }
 
 authRouter.post("/register", async (req, res) => {
@@ -107,44 +63,15 @@ authRouter.post("/register", async (req, res) => {
     return;
   }
 
-  const issuedPassword = generateSixDigitPassword();
-  const passwordHash = await hashPassword(issuedPassword);
+  const request = await startPhoneVerificationRequest({
+    phone,
+    purpose: PhoneVerificationPurpose.REGISTER,
+    fullName
+  });
 
-  try {
-    const user = await prisma.$transaction(
-      async (tx) => {
-        const created = await tx.user.create({
-          data: {
-            phone,
-            fullName,
-            password: passwordHash,
-            rubleBalance: REGISTRATION_START_BALANCE_RUB,
-            rubleBalanceKopecks: REGISTRATION_START_BALANCE_KOPECKS,
-            minuteBalanceSeconds: 0
-          }
-        });
-
-        await createDefaultProfiles(tx, created.id, created.phone);
-        await createStartingBalanceGrant(tx, created.id);
-        return created;
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    );
-
-    const token = createToken({ userId: user.id, phone: user.phone });
-
-    res.status(201).json({
-      token,
-      user: publicUser(user),
-      issuedPassword,
-      delivery: {
-        channel: "sms_stub",
-        message: `SMS integration is not connected yet. Test password: ${issuedPassword}`
-      }
-    });
-  } catch (error) {
-    throw error;
-  }
+  res.status(202).json({
+    verification: publicPhoneVerificationRequest(request)
+  });
 });
 
 authRouter.post("/login", async (req, res) => {
@@ -190,19 +117,67 @@ authRouter.post("/forgot-password", async (req, res) => {
     return;
   }
 
-  const issuedPassword = generateSixDigitPassword();
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { password: await hashPassword(issuedPassword) }
+  const request = await startPhoneVerificationRequest({
+    phone: parsed.data.phone,
+    purpose: PhoneVerificationPurpose.RECOVER
   });
 
-  res.json({
-    issuedPassword,
-    delivery: {
-      channel: "sms_stub",
-      message: `SMS integration is not connected yet. Recovery password: ${issuedPassword}`
-    }
+  res.status(202).json({
+    verification: publicPhoneVerificationRequest(request)
   });
+});
+
+authRouter.get("/phone-verification/:id", async (req, res) => {
+  const parsed = verificationParamsSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid verification id", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const request = await getFreshPhoneVerificationRequest(parsed.data.id);
+  if (!request) {
+    res.status(404).json({ message: "Verification request not found" });
+    return;
+  }
+
+  const verification = publicPhoneVerificationRequest(request);
+
+  if (request.status !== PhoneVerificationStatus.VERIFIED) {
+    res.json({ verification });
+    return;
+  }
+
+  const user = request.userId
+    ? await prisma.user.findUnique({
+        where: { id: request.userId },
+        select: { id: true, phone: true, fullName: true, createdAt: true }
+      })
+    : null;
+
+  if (!user || !request.issuedPassword) {
+    res.json({ verification });
+    return;
+  }
+
+  const payload = {
+    verification,
+    issuedPassword: request.issuedPassword,
+    delivery: {
+      channel: "call_verification",
+      message: "Phone ownership was verified by an incoming call."
+    }
+  };
+
+  if (request.purpose === PhoneVerificationPurpose.REGISTER) {
+    res.json({
+      ...payload,
+      token: createToken({ userId: user.id, phone: user.phone }),
+      user: publicUser(user)
+    });
+    return;
+  }
+
+  res.json(payload);
 });
 
 authRouter.put("/password", requireAuth, async (req, res) => {

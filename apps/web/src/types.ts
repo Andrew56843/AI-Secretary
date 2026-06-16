@@ -10,7 +10,33 @@ export type AuthResponse = {
   user: AuthUser;
   issuedPassword?: string;
   delivery?: {
-    channel: "sms_stub";
+    channel: "sms_stub" | "call_verification";
+    message: string;
+  };
+};
+
+export type PhoneVerification = {
+  id: string;
+  phone: string;
+  purpose: "REGISTER" | "RECOVER";
+  status: "PENDING" | "VERIFIED" | "EXPIRED";
+  verificationNumber: string;
+  expiresAt: string;
+  verifiedAt?: string | null;
+  createdAt: string;
+};
+
+export type PhoneVerificationStartResponse = {
+  verification: PhoneVerification;
+};
+
+export type PhoneVerificationStatusResponse = {
+  verification: PhoneVerification;
+  token?: string;
+  user?: AuthUser;
+  issuedPassword?: string;
+  delivery?: {
+    channel: "call_verification";
     message: string;
   };
 };

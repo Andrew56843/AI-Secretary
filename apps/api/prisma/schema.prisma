@@ -180,6 +180,23 @@ model PhoneContactName {
   @@index([userId])
 }
 
+model PhoneVerificationRequest {
+  id             String                  @id @default(cuid())
+  phone          String
+  purpose        PhoneVerificationPurpose
+  status         PhoneVerificationStatus @default(PENDING)
+  fullName       String?
+  issuedPassword String?
+  userId         String?
+  expiresAt      DateTime
+  verifiedAt     DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([phone, status, createdAt])
+  @@index([status, expiresAt])
+}
+
 enum ProfileStatus {
   ACTIVE
   PAUSED
@@ -222,4 +239,15 @@ enum TranscriptDeliveryStatus {
   PENDING
   SENT
   FAILED
+}
+
+enum PhoneVerificationPurpose {
+  REGISTER
+  RECOVER
+}
+
+enum PhoneVerificationStatus {
+  PENDING
+  VERIFIED
+  EXPIRED
 }

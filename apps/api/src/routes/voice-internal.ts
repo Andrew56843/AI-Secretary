@@ -7,6 +7,11 @@ import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
 import { kopecksToRubles } from "../lib/money.js";
 import { normalizePhone } from "../lib/phone.js";
+import {
+  completeLatestPhoneVerificationForCall,
+  isPhoneVerificationDid,
+  publicPhoneVerificationRequest
+} from "../lib/phone-verification.js";
 import { prisma } from "../lib/prisma.js";
 
 const voiceInternalRouter = Router();
@@ -380,6 +385,38 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
       : parsed.data.direction === "INBOUND"
         ? CallDirection.INBOUND
         : undefined;
+
+  if (isPhoneVerificationDid(parsed.data.did)) {
+    const verification = await completeLatestPhoneVerificationForCall(parsed.data.callerId);
+    if (verification) {
+      res.json({
+        ok: true,
+        call: {
+          uuid: parsed.data.uuid ?? null,
+          did: parsed.data.did ?? null,
+          callerId: parsed.data.callerId ?? null,
+          action: "HANGUP",
+          reason: "PHONE_VERIFICATION"
+        },
+        verification: {
+          completed: verification.completed,
+          reason: verification.reason,
+          request: publicPhoneVerificationRequest(verification.request)
+        },
+        profile: {
+          action: "HANGUP",
+          reason: "PHONE_VERIFICATION",
+          clientId: "phone-verification",
+          assistantProfileId: null,
+          direction: CallDirection.INBOUND,
+          autoGreeting: false,
+          maxDialogSeconds: 1
+        }
+      });
+      return;
+    }
+  }
+
   const profile = parsed.data.assistantProfileId
     ? await findActiveProfileById(parsed.data.assistantProfileId, direction)
     : await findInboundProfileByDid(parsed.data.did!);
