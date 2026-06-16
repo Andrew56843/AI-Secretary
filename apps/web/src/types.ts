@@ -147,10 +147,7 @@ export type BillingState = {
 };
 
 export type PaymentTopUp = {
-  id: string;
-  uuid: string;
-  status: "PENDING" | "PROCESSING" | "PAID" | "CANCELED" | "FAILED";
-  paymentUrl?: string | null;
+  paymentUrl: string;
 };
 
 export type GoogleIntegration = {

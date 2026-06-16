@@ -83,7 +83,6 @@ async function main() {
     }
   });
   await prisma.outboundContact.deleteMany({ where: { userId: user.id } });
-  await prisma.paymentOrder.deleteMany({ where: { userId: user.id } });
   await prisma.billingTransaction.deleteMany({ where: { userId: user.id } });
 
   await prisma.assistantProfile.upsert({

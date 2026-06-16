@@ -6,7 +6,7 @@ Portfolio MVP for a SaaS-style AI secretary service:
 - backend: Node.js + Express + TypeScript + Prisma (`apps/api`)
 - database: PostgreSQL
 - deployment: Docker Compose
-- payments: Mulen Pay
+- payments: CloudTips redirect
 
 ## What this demo does
 
@@ -15,7 +15,7 @@ Portfolio MVP for a SaaS-style AI secretary service:
 - reserves a phone number from a free pool
 - stores and displays call logs
 - serves pre-generated voice preview MP3 files from `apps/web/public/voice-previews`
-- creates Mulen Pay top-up orders and credits balance after payment callbacks
+- redirects balance top-ups to CloudTips with amount and user id
 
 ## Run with Docker
 
@@ -82,26 +82,15 @@ Seed account:
 - phone: `+79054176285`
 - password: `123456`
 
-## Mulen Pay
+## Payments
 
-Set these API env variables in production before accepting real payments:
-
-```bash
-MULENPAY_API_KEY=
-MULENPAY_SECRET_KEY=
-MULENPAY_SHOP_ID=
-MULENPAY_BASE_URL=https://mulenpay.ru/api
-MULENPAY_WEBSITE_URL=https://your-site.example
-MULENPAY_SIGN_WITH_UUID=false
-```
-
-Callback URL for the Mulen Pay merchant cabinet:
+`/api/billing/top-up` validates the amount and returns a CloudTips payment link:
 
 ```text
-https://your-api.example/api/billing/mulenpay/callback
+https://pay.cloudtips.ru/p/73767f54?amount=[amount]&hideamount=true&userid=[userId]
 ```
 
-Without Mulen Pay keys, `/api/billing/top-up` credits the balance immediately only outside production.
+CloudTips payments do not automatically credit the in-app balance yet.
 
 ## Local development
 
