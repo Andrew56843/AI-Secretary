@@ -26,7 +26,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
-      GOOGLE_CALENDAR_SCOPES: ${GOOGLE_CALENDAR_SCOPES:-https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email}
+      GOOGLE_CALENDAR_SCOPES: ${GOOGLE_CALENDAR_SCOPES:-https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email}
     volumes:
       - /home/andrew/ai/records:/home/andrew/ai/records:ro
     networks:
