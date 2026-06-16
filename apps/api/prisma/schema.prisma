@@ -24,6 +24,7 @@ model User {
   outboundContacts      OutboundContact[]
   billingTransactions   BillingTransaction[]
   googleAccount         GoogleAccount?
+  googleOAuthStates     GoogleOAuthState[]
   telegramAccount       TelegramAccount?
   transcriptDeliveries  TranscriptDelivery[]
   phoneContactNames     PhoneContactName[]
@@ -122,16 +123,34 @@ model BillingTransaction {
 }
 
 model GoogleAccount {
-  id          String            @id @default(cuid())
-  userId      String            @unique
-  status      IntegrationStatus @default(DISCONNECTED)
-  googleEmail String?
-  calendarId  String?
-  connectedAt DateTime?
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  id             String            @id @default(cuid())
+  userId         String            @unique
+  status         IntegrationStatus @default(DISCONNECTED)
+  googleEmail    String?
+  calendarId     String?
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  scope          String?
+  connectedAt    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
-  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model GoogleOAuthState {
+  id         String   @id @default(cuid())
+  userId     String
+  state      String   @unique
+  calendarId String   @default("primary")
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model TelegramAccount {

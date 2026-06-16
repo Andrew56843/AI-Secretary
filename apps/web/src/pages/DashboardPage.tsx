@@ -80,6 +80,14 @@ type VoiceOption = {
   previewPitch: number;
 };
 
+function readGoogleOAuthResult() {
+  const googleResult = new URL(window.location.href).searchParams.get("google");
+  if (googleResult === "connected") {
+    return "connected";
+  }
+  return googleResult ? "error" : null;
+}
+
 type ScenarioTemplateId = "dentist" | "barber" | "tutor" | "auto" | "beauty" | "custom";
 
 function delay(ms: number) {
@@ -582,8 +590,12 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     inbound: false,
     outbound: false
   });
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(() =>
+    readGoogleOAuthResult() === "connected" ? "Google Calendar подключен" : null
+  );
+  const [error, setError] = useState<string | null>(() =>
+    readGoogleOAuthResult() === "error" ? "Не удалось подключить Google Calendar" : null
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [promptApplying, setPromptApplying] = useState(false);
@@ -599,6 +611,18 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   });
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const voicePreviewRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+
+    if (!url.searchParams.has("google")) {
+      return;
+    }
+
+    url.searchParams.delete("google");
+    url.searchParams.delete("reason");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1052,8 +1076,12 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       const response = await connectGoogleCalendar(token, {
         calendarId: "primary"
       });
+      if (response.authUrl) {
+        window.location.assign(response.authUrl);
+        return;
+      }
+
       setIntegrations((prev) => ({ google: response.google, telegram: prev!.telegram }));
-      setNotice("Google Calendar подключен");
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Google Calendar");
     }
@@ -1550,7 +1578,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           <section className="panel integration-card">
             <div className="panel-title">
               <h2>Интеграции</h2>
-              <span>Тестовый режим</span>
+              <span>Аккаунты</span>
             </div>
             <div className="integration-list">
               <article className="integration-item">

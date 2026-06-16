@@ -13,6 +13,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
       CORS_ORIGIN: ${CORS_ORIGIN}
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-}
       VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -22,6 +23,10 @@ services:
       CALL_RECORDINGS_ROOT: ${CALL_RECORDINGS_ROOT:-/home/andrew/ai/records}
       PHONE_VERIFICATION_CALL_NUMBER: ${PHONE_VERIFICATION_CALL_NUMBER:-+79952225212}
       PHONE_VERIFICATION_TTL_SECONDS: ${PHONE_VERIFICATION_TTL_SECONDS:-300}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
+      GOOGLE_CALENDAR_SCOPES: ${GOOGLE_CALENDAR_SCOPES:-https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email}
     volumes:
       - /home/andrew/ai/records:/home/andrew/ai/records:ro
     networks:
@@ -35,7 +40,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL}
+        VITE_API_URL: ${VITE_API_URL:-}
     container_name: ai-secretary-saas-web
     restart: unless-stopped
     depends_on:

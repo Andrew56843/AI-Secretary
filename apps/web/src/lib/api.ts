@@ -124,8 +124,8 @@ export function getIntegrations(token: string) {
   return request<{ integrations: IntegrationsState }>("/api/integrations/me", { token });
 }
 
-export function connectGoogleCalendar(token: string, payload: { googleEmail?: string; calendarId?: string }) {
-  return request<{ google: GoogleIntegration }>("/api/integrations/google/connect", {
+export function connectGoogleCalendar(token: string, payload: { calendarId?: string }) {
+  return request<{ google: GoogleIntegration; authUrl: string }>("/api/integrations/google/connect", {
     token,
     method: "POST",
     body: payload

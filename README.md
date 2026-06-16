@@ -16,6 +16,7 @@ Portfolio MVP for a SaaS-style AI secretary service:
 - stores and displays call logs
 - serves pre-generated voice preview MP3 files from `apps/web/public/voice-previews`
 - redirects balance top-ups to CloudTips with amount and user id
+- connects Google Calendar through OAuth 2.0 and stores server-side tokens for future event automation
 
 ## Run with Docker
 
@@ -91,6 +92,27 @@ https://pay.cloudtips.ru/p/73767f54?amount=[amount]&hideamount=true&userid=[user
 ```
 
 CloudTips payments do not automatically credit the in-app balance yet.
+
+## Google Calendar
+
+Create an OAuth client in Google Cloud Console and add the app callback URL to Authorized redirect URIs:
+
+```text
+https://your-domain.example/api/integrations/google/oauth/callback
+```
+
+Required server environment variables:
+
+```bash
+PUBLIC_WEB_URL=https://your-domain.example
+CORS_ORIGIN=https://your-domain.example
+VITE_API_URL=
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=https://your-domain.example/api/integrations/google/oauth/callback
+```
+
+`VITE_API_URL` is intentionally empty in the container build: nginx proxies `/api/*` from the web container to the API service, so the browser can use the same domain for the site and backend.
 
 ## Local development
 
