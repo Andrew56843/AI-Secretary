@@ -58,14 +58,6 @@ function formatPhoneForDisplay(phone: string) {
   return phone;
 }
 
-function formatDeadline(value: string) {
-  return new Date(value).toLocaleTimeString("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-}
-
 export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [fullName, setFullName] = useState("");
@@ -259,9 +251,8 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
 
         {waitingForCall && (
           <div className="code-box verification-box">
-            <span>Позвоните с номера {formatPhoneForDisplay(verification.phone)} на</span>
+            <span>Позвоните по номеру</span>
             <strong>{formatPhoneForDisplay(verification.verificationNumber)}</strong>
-            <span>Ждём звонок до {formatDeadline(verification.expiresAt)}. После проверки звонок сразу сбросится.</span>
           </div>
         )}
 
