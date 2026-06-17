@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
+import { Link } from "react-router-dom";
 import {
   applyPromptCommand,
   changePassword,
@@ -1487,12 +1488,12 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
 
                 <div className="prompt-tools">
                   <label>
-                    Команда для изменения промпта
+                    Команда для AI-секретаря
                     <textarea
                       className="compact-textarea"
                       value={form.promptRequest}
                       onChange={(event) => setForm({ ...form, promptRequest: event.target.value })}
-                      placeholder="Например: отвечай короче, чаще уточняй адрес, не обещай скидки"
+                      placeholder="Например: в звонке отвечай короче, чаще уточняй адрес, не обещай скидки"
                       rows={3}
                       disabled={promptApplying}
                     />
@@ -1763,7 +1764,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         )}
       </section>
 
-      <footer className="site-footer">79054176285@yandex.ru - Email для связи</footer>
+      <footer className="site-footer">
+        <span>79054176285@yandex.ru - Email для связи</span>
+        <Link to="/privacy">Политика конфиденциальности</Link>
+        <Link to="/terms">Пользовательское соглашение</Link>
+      </footer>
 
       {topUpModalOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setTopUpModalOpen(false)}>

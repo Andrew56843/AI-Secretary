@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { completePhoneVerification, forgotPassword, getPhoneVerification, login, register } from "../lib/api";
 import type { AuthResponse, PhoneVerification } from "../types";
 
@@ -16,15 +16,17 @@ type AuthMode = "login" | "register" | "recover";
 const RU_PHONE_PREFIX = "+7";
 const VERIFICATION_POLL_INTERVAL_MS = 2000;
 
-function formatRuPhoneInput(input: string) {
+function getRuLocalPhoneDigits(input: string) {
   let digits = input.replace(/\D/g, "");
 
   if (digits.startsWith("7") || digits.startsWith("8")) {
     digits = digits.slice(1);
   }
 
-  const localDigits = digits.slice(0, 10);
+  return digits.slice(0, 10);
+}
 
+function formatRuPhoneDigits(localDigits: string) {
   const operator = localDigits.slice(0, 3);
   const middle = localDigits.slice(3, 6);
   const firstPair = localDigits.slice(6, 8);
@@ -34,7 +36,7 @@ function formatRuPhoneInput(input: string) {
   if (operator) {
     formatted += `(${operator}`;
   }
-  if (operator.length === 3) {
+  if (operator.length === 3 && middle) {
     formatted += ")";
   }
   if (middle) {
@@ -56,6 +58,11 @@ function formatPhoneForDisplay(phone: string) {
     return `+7 ${digits.slice(1, 4)} ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
   }
   return phone;
+}
+
+function formatPhoneForTelHref(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  return digits ? `tel:+${digits}` : "tel:";
 }
 
 export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
@@ -160,6 +167,10 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
     }
   }
 
+  function handlePhoneChange(event: ChangeEvent<HTMLInputElement>) {
+    setPhone(formatRuPhoneDigits(getRuLocalPhoneDigits(event.target.value)));
+  }
+
   const waitingForCall = verification?.status === "PENDING";
   const readyForPassword = (mode === "register" || mode === "recover") && verification?.status === "VERIFIED";
 
@@ -208,7 +219,7 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
             type="tel"
             inputMode="numeric"
             value={phone}
-            onChange={(event) => setPhone(formatRuPhoneInput(event.target.value))}
+            onChange={handlePhoneChange}
             placeholder="+7(999)999-99-99"
             pattern="\+7\(\d{3}\)\d{3}-\d{2}-\d{2}"
             maxLength={16}
@@ -256,6 +267,9 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
               <strong>{formatPhoneForDisplay(verification.verificationNumber)}</strong>
             </div>
             <span className="verification-note">Это звонок-сброс. Для подтверждения вашего номера телефона.</span>
+            <a className="call-phone-link" href={formatPhoneForTelHref(verification.verificationNumber)}>
+              Позвонить
+            </a>
           </div>
         )}
 

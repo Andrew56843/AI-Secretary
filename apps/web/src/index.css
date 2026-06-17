@@ -127,7 +127,7 @@ button:focus-visible {
 
 button:disabled {
   opacity: 0.65;
-  cursor: progress;
+  cursor: default;
   transform: none;
 }
 
@@ -930,6 +930,27 @@ label {
   color: var(--brand-strong);
 }
 
+.landing-footer {
+  width: min(1120px, 100% - 2rem);
+  margin: -1rem auto 2rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.landing-footer a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.landing-footer a:hover {
+  color: var(--brand-strong);
+}
+
 .modal-backdrop.landing-auth-backdrop {
   background: rgba(31, 34, 38, 0.52);
   backdrop-filter: blur(10px);
@@ -1072,24 +1093,66 @@ label {
 }
 
 .call-verification-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
-  flex-direction: column;
   justify-content: flex-start;
-  gap: 0.45rem;
+  gap: 0.55rem;
 }
 
 .verification-call-main {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
+  gap: 0.65rem;
   width: 100%;
+}
+
+.verification-call-main span {
+  line-height: 1.25;
+}
+
+.verification-call-main strong {
+  max-width: 100%;
+  color: var(--brand-strong);
+  font-size: 1.28rem;
+  letter-spacing: 0.03rem;
+  line-height: 1.15;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .code-box .verification-note {
   font-size: 0.86rem;
   font-weight: 600;
   line-height: 1.35;
+}
+
+.call-phone-link {
+  min-height: 2.4rem;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  padding: 0 0.85rem;
+  background: var(--brand);
+  color: #ffffff;
+  font-weight: 820;
+  text-decoration: none;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.call-phone-link:hover {
+  border-color: var(--brand-strong);
+  background: var(--brand-strong);
+  color: #ffffff;
+  transform: translateY(-1px);
 }
 
 .dashboard-shell {
@@ -2154,10 +2217,25 @@ label {
 }
 
 .site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
   padding: 0.4rem 0 0.2rem;
   color: #8a929d;
   font-size: 0.78rem;
   text-align: center;
+}
+
+.site-footer a {
+  color: var(--ink);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  color: var(--brand-strong);
 }
 
 .legal-page {
@@ -2404,6 +2482,51 @@ label {
   .shell {
     width: min(100% - 1rem, 1120px);
     padding-top: 0.7rem;
+  }
+
+  .modal-backdrop.landing-auth-backdrop {
+    align-items: start;
+    overflow-y: auto;
+    padding: 0.55rem;
+  }
+
+  .landing-auth-modal {
+    width: 100%;
+    margin: 0.3rem 0 1rem;
+  }
+
+  .landing-auth-close {
+    top: 0.55rem;
+    right: 0.55rem;
+  }
+
+  .auth-panel-modal {
+    padding: 1rem;
+  }
+
+  .auth-panel-modal .auth-header {
+    padding-right: 2.2rem;
+  }
+
+  .call-verification-box {
+    padding: 0.7rem;
+  }
+
+  .verification-call-main {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .verification-call-main strong {
+    font-size: 1.34rem;
+    overflow-wrap: anywhere;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .call-phone-link {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .topbar {

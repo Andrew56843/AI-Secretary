@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { AuthPanel } from "./AuthPage";
 import type { AuthResponse } from "../types";
 
@@ -247,6 +248,13 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
           ))}
         </div>
       </section>
+
+      <footer className="landing-footer">
+        <span>© 2026 callsec</span>
+        <a href="mailto:79054176285@yandex.ru">79054176285@yandex.ru</a>
+        <Link to="/privacy">Политика конфиденциальности</Link>
+        <Link to="/terms">Пользовательское соглашение</Link>
+      </footer>
 
       {authOpen && (
         <div className="modal-backdrop landing-auth-backdrop" role="presentation" onMouseDown={() => setAuthOpen(false)}>
