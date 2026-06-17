@@ -5,6 +5,7 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
+import { maybeCreateCalendarEventFromCallLog } from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
 import { normalizePhone } from "../lib/phone.js";
 import {
@@ -289,6 +290,32 @@ async function finishOutboundContact(
   }
 
   return releaseOutboundContactForRetry(tx, contact, lastCallLogId);
+}
+
+function scheduleCalendarAutomation(input: {
+  userId: string;
+  callLogId: string;
+  customerPhone: string;
+  direction: CallDirection;
+  transcript?: string | null;
+  createdAt: Date;
+}) {
+  void maybeCreateCalendarEventFromCallLog(input)
+    .then((result) => {
+      if (result.status === "created" || result.status === "exists") {
+        console.log("Google Calendar event synced", {
+          callLogId: input.callLogId,
+          status: result.status,
+          eventId: result.eventId
+        });
+      }
+    })
+    .catch((error: unknown) => {
+      console.warn("Google Calendar automation failed", {
+        callLogId: input.callLogId,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
 }
 
 async function findInboundProfileByDid(did: string) {
@@ -681,6 +708,17 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
     );
+
+    if (payload.status === CallStatus.SUCCESS) {
+      scheduleCalendarAutomation({
+        userId: profile.userId,
+        callLogId: result.log.id,
+        customerPhone,
+        direction,
+        transcript: payload.transcript,
+        createdAt: result.log.createdAt
+      });
+    }
 
     res.status(201).json({ ok: true, log: result.log, outbound: result.outbound });
   } catch (error) {
