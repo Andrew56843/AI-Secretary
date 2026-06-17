@@ -12,6 +12,7 @@ model User {
   phone                 String               @unique
   fullName              String?
   password              String
+  timeZone              String               @default("Europe/Moscow")
   rubleBalance          Int                  @default(100)
   rubleBalanceKopecks   Int                  @default(10000)
   minuteBalanceSeconds  Int                  @default(0)

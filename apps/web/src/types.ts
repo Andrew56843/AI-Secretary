@@ -2,6 +2,7 @@ export type AuthUser = {
   id: string;
   phone: string;
   fullName?: string | null;
+  timeZone?: string | null;
   createdAt?: string;
 };
 

@@ -101,6 +101,14 @@ export function changePassword(token: string, password: string) {
   });
 }
 
+export function updateMyTimeZone(token: string, timeZone: string) {
+  return request<{ user: AuthResponse["user"] }>("/api/auth/timezone", {
+    token,
+    method: "PUT",
+    body: { timeZone }
+  });
+}
+
 export function getMyProfiles(token: string) {
   return request<{ profiles: ProfilesByMode }>("/api/profiles/me", { token });
 }

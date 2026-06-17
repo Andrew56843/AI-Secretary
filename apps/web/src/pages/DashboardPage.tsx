@@ -21,7 +21,8 @@ import {
   rentPhoneNumber,
   saveContactName,
   saveProfile,
-  topUpBalance
+  topUpBalance,
+  updateMyTimeZone
 } from "../lib/api";
 import type {
   AssistantProfile,
@@ -677,6 +678,17 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     return () => {
       isMounted = false;
     };
+  }, [token]);
+
+  useEffect(() => {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!timeZone) {
+      return;
+    }
+
+    updateMyTimeZone(token, timeZone).catch(() => {
+      // Time zone sync is helpful for calendar automation, but should never block the dashboard.
+    });
   }, [token]);
 
   useEffect(() => {

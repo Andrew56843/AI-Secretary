@@ -7,7 +7,7 @@ import { decryptSecret, encryptSecret } from "./secret-box.js";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3";
-const CALENDAR_TIME_ZONE = "Europe/Moscow";
+const DEFAULT_CALENDAR_TIME_ZONE = "Europe/Moscow";
 const DEFAULT_EVENT_DURATION_MS = 60 * 60 * 1000;
 const ACCESS_TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
 
@@ -82,9 +82,42 @@ function getGoogleOAuthConfig() {
   };
 }
 
-function getReferenceDateTime(date: Date) {
+function normalizeTimeZone(timeZone: string | null | undefined) {
+  if (!timeZone) {
+    return DEFAULT_CALENDAR_TIME_ZONE;
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return DEFAULT_CALENDAR_TIME_ZONE;
+  }
+}
+
+function getTimeZoneOffset(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "shortOffset",
+    hour12: false
+  }).formatToParts(date);
+  const offsetText = parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+  const match = offsetText.match(/^GMT(?:(?<sign>[+-])(?<hours>\d{1,2})(?::(?<minutes>\d{2}))?)?$/);
+
+  if (!match?.groups?.sign) {
+    return "+00:00";
+  }
+
+  const hours = (match.groups.hours ?? "0").padStart(2, "0");
+  const minutes = match.groups.minutes ?? "00";
+  return `${match.groups.sign}${hours}:${minutes}`;
+}
+
+function getReferenceDateTime(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CALENDAR_TIME_ZONE,
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -94,8 +127,9 @@ function getReferenceDateTime(date: Date) {
     hour12: false
   }).formatToParts(date);
   const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const offset = getTimeZoneOffset(date, timeZone);
 
-  return `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}:${value.second}+03:00`;
+  return `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}:${value.second}${offset}`;
 }
 
 function parseJsonObject(text: string) {
@@ -121,6 +155,7 @@ function buildExtractionRequest(input: {
   customerPhone: string;
   direction: CallDirection;
   createdAt: Date;
+  timeZone: string;
 }) {
   return {
     model: env.PROMPT_EDITOR_MODEL,
@@ -134,11 +169,11 @@ function buildExtractionRequest(input: {
           "Return strict JSON only.",
           "Create an event only when the assistant clearly confirmed that an appointment was booked or recorded.",
           "Do not create an event for vague interest, questions, cancelled appointments, failed calls, or escalation.",
-          `Use ${CALENDAR_TIME_ZONE} as the business time zone.`,
-          `The reference local date-time for relative phrases is ${getReferenceDateTime(input.createdAt)}.`,
+          `Use ${input.timeZone} as the business time zone.`,
+          `The reference local date-time for relative phrases is ${getReferenceDateTime(input.createdAt, input.timeZone)}.`,
           "Resolve phrases like 'tomorrow' relative to the reference date.",
           "If the transcript confirms a start time but no duration, use 60 minutes.",
-          "Return ISO 8601 date-times with an offset, for example 2026-06-18T13:00:00+03:00.",
+          "Return ISO 8601 date-times with the correct UTC offset for the business time zone.",
           "JSON shape: {\"shouldCreateEvent\":boolean,\"confidence\":number,\"title\":string|null,\"customerName\":string|null,\"reason\":string|null,\"startDateTime\":string|null,\"endDateTime\":string|null}."
         ].join("\n")
       },
@@ -295,6 +330,7 @@ async function createGoogleCalendarEvent(params: {
   customerPhone: string;
   transcript: string;
   extracted: AppointmentExtraction & { startDateTime: string; endDateTime: string };
+  timeZone: string;
 }) {
   const calendarId = params.account.calendarId || "primary";
   const existing = await findExistingEvent({
@@ -317,11 +353,11 @@ async function createGoogleCalendarEvent(params: {
     description: buildEventDescription(params),
     start: {
       dateTime: params.extracted.startDateTime,
-      timeZone: CALENDAR_TIME_ZONE
+      timeZone: params.timeZone
     },
     end: {
       dateTime: params.extracted.endDateTime,
-      timeZone: CALENDAR_TIME_ZONE
+      timeZone: params.timeZone
     },
     extendedProperties: {
       private: {
@@ -352,6 +388,7 @@ async function extractAppointmentFromTranscript(input: {
   customerPhone: string;
   direction: CallDirection;
   createdAt: Date;
+  timeZone: string;
 }) {
   try {
     const completion = await postOpenAiJson("/chat/completions", buildExtractionRequest(input));
@@ -386,6 +423,12 @@ export async function maybeCreateCalendarEventFromCallLog(input: {
   }
 
   const account = await prisma.googleAccount.findUnique({ where: { userId: input.userId } });
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId },
+    select: { timeZone: true }
+  });
+  const timeZone = normalizeTimeZone(user?.timeZone);
+
   if (!account || account.status !== "CONNECTED") {
     return { status: "skipped", reason: "GOOGLE_NOT_CONNECTED" };
   }
@@ -397,7 +440,8 @@ export async function maybeCreateCalendarEventFromCallLog(input: {
     transcript,
     customerPhone: input.customerPhone,
     direction: input.direction,
-    createdAt: input.createdAt
+    createdAt: input.createdAt,
+    timeZone
   });
   if (!extracted) {
     return { status: "skipped", reason: "NO_CONFIRMED_APPOINTMENT" };
@@ -410,6 +454,7 @@ export async function maybeCreateCalendarEventFromCallLog(input: {
     callLogId: input.callLogId,
     customerPhone: input.customerPhone,
     transcript,
-    extracted
+    extracted,
+    timeZone
   });
 }

@@ -35,15 +35,34 @@ const changePasswordSchema = z.object({
   password: passwordSchema
 });
 
+const timeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .refine((value) => {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  }, "Invalid time zone");
+
+const updateTimeZoneSchema = z.object({
+  timeZone: timeZoneSchema
+});
+
 const verificationParamsSchema = z.object({
   id: z.string().trim().min(1).max(80)
 });
 
-function publicUser(user: { id: string; phone: string; fullName: string | null; createdAt?: Date }) {
+function publicUser(user: { id: string; phone: string; fullName: string | null; timeZone?: string | null; createdAt?: Date }) {
   return {
     id: user.id,
     phone: user.phone,
     fullName: user.fullName,
+    timeZone: user.timeZone ?? "Europe/Moscow",
     createdAt: user.createdAt
   };
 }
@@ -195,6 +214,28 @@ authRouter.put("/password", requireAuth, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+authRouter.put("/timezone", requireAuth, async (req, res) => {
+  const parsed = updateTimeZoneSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const user = await prisma.user.update({
+    where: { id: req.user!.userId },
+    data: { timeZone: parsed.data.timeZone },
+    select: {
+      id: true,
+      phone: true,
+      fullName: true,
+      timeZone: true,
+      createdAt: true
+    }
+  });
+
+  res.json({ user: publicUser(user) });
+});
+
 authRouter.get("/me", requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user!.userId },
@@ -202,6 +243,7 @@ authRouter.get("/me", requireAuth, async (req, res) => {
       id: true,
       phone: true,
       fullName: true,
+      timeZone: true,
       createdAt: true
     }
   });
