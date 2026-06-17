@@ -9,7 +9,6 @@ export type AuthUser = {
 export type AuthResponse = {
   token: string;
   user: AuthUser;
-  issuedPassword?: string;
   delivery?: {
     channel: "sms_stub" | "call_verification";
     message: string;
@@ -33,9 +32,10 @@ export type PhoneVerificationStartResponse = {
 
 export type PhoneVerificationStatusResponse = {
   verification: PhoneVerification;
-  token?: string;
-  user?: AuthUser;
-  issuedPassword?: string;
+};
+
+export type PhoneVerificationCompleteResponse = AuthResponse & {
+  verification: PhoneVerification;
   delivery?: {
     channel: "call_verification";
     message: string;

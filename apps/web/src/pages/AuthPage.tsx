@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { forgotPassword, getPhoneVerification, login, register } from "../lib/api";
+import { completePhoneVerification, forgotPassword, getPhoneVerification, login, register } from "../lib/api";
 import type { AuthResponse, PhoneVerification } from "../types";
 
 type AuthPageProps = {
@@ -71,8 +71,7 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState(RU_PHONE_PREFIX);
   const [password, setPassword] = useState("");
-  const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
-  const [pendingAuth, setPendingAuth] = useState<AuthResponse | null>(null);
+  const [newPassword, setNewPassword] = useState("");
   const [verification, setVerification] = useState<PhoneVerification | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,22 +97,7 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
         setVerification(response.verification);
 
         if (response.verification.status === "VERIFIED") {
-          setIssuedPassword(response.issuedPassword ?? null);
-
-          if (response.token && response.user) {
-            setPendingAuth({
-              token: response.token,
-              user: response.user,
-              issuedPassword: response.issuedPassword,
-              delivery: response.delivery
-            });
-            return;
-          }
-
-          if (response.issuedPassword) {
-            setMode("login");
-            setError(null);
-          }
+          setError(null);
           return;
         }
 
@@ -143,8 +127,7 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
   function switchMode(nextMode: AuthMode) {
     setMode(nextMode);
     setError(null);
-    setIssuedPassword(null);
-    setPendingAuth(null);
+    setNewPassword("");
     setVerification(null);
   }
 
@@ -152,18 +135,25 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
     event.preventDefault();
     setLoading(true);
     setError(null);
-    setIssuedPassword(null);
-    setPendingAuth(null);
-    setVerification(null);
 
     try {
+      if ((mode === "register" || mode === "recover") && verification?.status === "VERIFIED") {
+        const response = await completePhoneVerification(verification.id, { password: newPassword });
+        onAuthorized(response);
+        return;
+      }
+
+      setVerification(null);
+
       if (mode === "register") {
+        setNewPassword("");
         const response = await register({ phone, fullName: fullName || undefined });
         setVerification(response.verification);
         return;
       }
 
       if (mode === "recover") {
+        setNewPassword("");
         const response = await forgotPassword({ phone });
         setVerification(response.verification);
         return;
@@ -179,6 +169,7 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
   }
 
   const waitingForCall = verification?.status === "PENDING";
+  const readyForPassword = (mode === "register" || mode === "recover") && verification?.status === "VERIFIED";
 
   return (
     <section className={className ? `auth-panel ${className}` : "auth-panel"}>
@@ -249,6 +240,23 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
           </label>
         )}
 
+        {readyForPassword && (
+          <label>
+            Новый код-пароль
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="\d{6}"
+              maxLength={6}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="123456"
+              required
+              autoFocus
+            />
+          </label>
+        )}
+
         {waitingForCall && (
           <div className="code-box verification-box">
             <span>Позвоните с номера {formatPhoneForDisplay(verification.phone)} на</span>
@@ -257,34 +265,31 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
           </div>
         )}
 
-        {issuedPassword && (
-          <div className="code-box">
-            <span>{verification?.purpose === "REGISTER" ? "Ваш код-пароль" : "Новый код-пароль"}</span>
-            <strong>{issuedPassword}</strong>
+        {readyForPassword && (
+          <div className="code-box verification-box">
+            <span>Номер подтверждён. Задайте новый код из 6 цифр и завершите действие.</span>
           </div>
         )}
 
         {error && <p className="error-text">{error}</p>}
 
-        {pendingAuth ? (
-          <button type="button" onClick={() => onAuthorized(pendingAuth)}>
-            Продолжить в кабинет
-          </button>
-        ) : (
-          <button type="submit" disabled={loading}>
-            {loading
-              ? "Подождите..."
-              : mode === "register"
-                ? waitingForCall
+        <button type="submit" disabled={loading || (readyForPassword && newPassword.length !== 6)}>
+          {loading
+            ? "Подождите..."
+            : mode === "register"
+              ? readyForPassword
+                ? "Зарегистрироваться"
+                : waitingForCall
                   ? "Отправить новый запрос"
                   : "Создать аккаунт"
-                : mode === "recover"
-                  ? waitingForCall
+              : mode === "recover"
+                ? readyForPassword
+                  ? "Войти"
+                  : waitingForCall
                     ? "Отправить новый запрос"
-                    : "Восстановить код"
-                  : "Войти"}
-          </button>
-        )}
+                    : "Восстановить доступ"
+                : "Войти"}
+        </button>
       </form>
     </section>
   );

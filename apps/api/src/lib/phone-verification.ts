@@ -1,8 +1,6 @@
 import { PhoneVerificationPurpose, PhoneVerificationStatus, Prisma } from "@prisma/client";
 import { env } from "../config.js";
-import { createDefaultProfiles, createStartingBalanceGrant, REGISTRATION_START_BALANCE_KOPECKS, REGISTRATION_START_BALANCE_RUB } from "./account-provisioning.js";
-import { hashPassword } from "./auth.js";
-import { generateSixDigitPassword, isValidPhone, normalizePhone } from "./phone.js";
+import { isValidPhone, normalizePhone } from "./phone.js";
 import { prisma } from "./prisma.js";
 
 export const PHONE_VERIFICATION_CALL_NUMBER = env.PHONE_VERIFICATION_CALL_NUMBER;
@@ -48,7 +46,10 @@ export async function startPhoneVerificationRequest(input: {
       await tx.phoneVerificationRequest.updateMany({
         where: {
           phone: input.phone,
-          status: PhoneVerificationStatus.PENDING
+          status: {
+            in: [PhoneVerificationStatus.PENDING, PhoneVerificationStatus.VERIFIED]
+          },
+          userId: null
         },
         data: {
           status: PhoneVerificationStatus.EXPIRED
@@ -134,109 +135,18 @@ export async function completeLatestPhoneVerificationForCall(callerId: string | 
         return null;
       }
 
-      const issuedPassword = generateSixDigitPassword();
-      const passwordHash = await hashPassword(issuedPassword);
-      let user:
-        | {
-            id: string;
-            phone: string;
-            fullName: string | null;
-            createdAt: Date;
-          }
-        | null = null;
-
-      if (request.purpose === PhoneVerificationPurpose.REGISTER) {
-        const existingUser = await tx.user.findUnique({
-          where: { phone },
-          select: { id: true }
-        });
-
-        if (existingUser) {
-          const expired = await tx.phoneVerificationRequest.update({
-            where: { id: request.id },
-            data: {
-              status: PhoneVerificationStatus.EXPIRED,
-              verifiedAt: null
-            }
-          });
-
-          return {
-            completed: false as const,
-            reason: "PHONE_ALREADY_REGISTERED",
-            request: expired,
-            user: null,
-            issuedPassword: null
-          };
-        }
-
-        user = await tx.user.create({
-          data: {
-            phone,
-            fullName: request.fullName,
-            password: passwordHash,
-            rubleBalance: REGISTRATION_START_BALANCE_RUB,
-            rubleBalanceKopecks: REGISTRATION_START_BALANCE_KOPECKS,
-            minuteBalanceSeconds: 0
-          },
-          select: {
-            id: true,
-            phone: true,
-            fullName: true,
-            createdAt: true
-          }
-        });
-
-        await createDefaultProfiles(tx, user.id, user.phone);
-        await createStartingBalanceGrant(tx, user.id);
-      } else {
-        user = await tx.user.findUnique({
-          where: { phone },
-          select: {
-            id: true,
-            phone: true,
-            fullName: true,
-            createdAt: true
-          }
-        });
-
-        if (!user) {
-          const expired = await tx.phoneVerificationRequest.update({
-            where: { id: request.id },
-            data: {
-              status: PhoneVerificationStatus.EXPIRED,
-              verifiedAt: null
-            }
-          });
-
-          return {
-            completed: false as const,
-            reason: "USER_NOT_FOUND",
-            request: expired,
-            user: null,
-            issuedPassword: null
-          };
-        }
-
-        await tx.user.update({
-          where: { id: user.id },
-          data: { password: passwordHash }
-        });
-      }
-
       const completedRequest = await tx.phoneVerificationRequest.update({
         where: { id: request.id },
         data: {
-          issuedPassword,
-          userId: user.id
+          issuedPassword: null,
+          userId: null
         }
       });
 
       return {
         completed: true as const,
         reason: null,
-        request: completedRequest,
-        user,
-        issuedPassword
+        request: completedRequest
       };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }

@@ -1,6 +1,12 @@
-import { PhoneVerificationPurpose, PhoneVerificationStatus } from "@prisma/client";
+import { PhoneVerificationPurpose, PhoneVerificationStatus, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
+import {
+  createDefaultProfiles,
+  createStartingBalanceGrant,
+  REGISTRATION_START_BALANCE_KOPECKS,
+  REGISTRATION_START_BALANCE_RUB
+} from "../lib/account-provisioning.js";
 import { comparePassword, createToken, hashPassword } from "../lib/auth.js";
 import { isValidPhone, normalizePhone } from "../lib/phone.js";
 import {
@@ -32,6 +38,10 @@ const loginSchema = z.object({
 });
 
 const changePasswordSchema = z.object({
+  password: passwordSchema
+});
+
+const completePhoneVerificationSchema = z.object({
   password: passwordSchema
 });
 
@@ -161,42 +171,199 @@ authRouter.get("/phone-verification/:id", async (req, res) => {
 
   const verification = publicPhoneVerificationRequest(request);
 
-  if (request.status !== PhoneVerificationStatus.VERIFIED) {
-    res.json({ verification });
+  res.json({ verification });
+});
+
+authRouter.post("/phone-verification/:id/complete", async (req, res) => {
+  const parsedParams = verificationParamsSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    res.status(400).json({ message: "Invalid verification id", errors: parsedParams.error.flatten() });
     return;
   }
 
-  const user = request.userId
-    ? await prisma.user.findUnique({
-        where: { id: request.userId },
-        select: { id: true, phone: true, fullName: true, createdAt: true }
-      })
-    : null;
-
-  if (!user || !request.issuedPassword) {
-    res.json({ verification });
+  const parsedBody = completePhoneVerificationSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsedBody.error.flatten() });
     return;
   }
 
-  const payload = {
-    verification,
-    issuedPassword: request.issuedPassword,
-    delivery: {
-      channel: "call_verification",
-      message: "Phone ownership was verified by an incoming call."
-    }
-  };
+  const passwordHash = await hashPassword(parsedBody.data.password);
 
-  if (request.purpose === PhoneVerificationPurpose.REGISTER) {
-    res.json({
-      ...payload,
-      token: createToken({ userId: user.id, phone: user.phone }),
-      user: publicUser(user)
+  const result = await prisma.$transaction(
+    async (tx) => {
+      const request = await tx.phoneVerificationRequest.findUnique({
+        where: { id: parsedParams.data.id }
+      });
+
+      if (!request) {
+        return { ok: false as const, status: 404, message: "Verification request not found" };
+      }
+
+      const verification = publicPhoneVerificationRequest(request);
+
+      if (request.status !== PhoneVerificationStatus.VERIFIED) {
+        return { ok: false as const, status: 409, message: "Phone is not verified yet", verification };
+      }
+
+      if (request.userId) {
+        return { ok: false as const, status: 409, message: "Verification request is already used", verification };
+      }
+
+      const latestRequest = await tx.phoneVerificationRequest.findFirst({
+        where: { phone: request.phone },
+        orderBy: { createdAt: "desc" },
+        select: { id: true }
+      });
+
+      if (latestRequest?.id !== request.id) {
+        const expired = await tx.phoneVerificationRequest.update({
+          where: { id: request.id },
+          data: {
+            status: PhoneVerificationStatus.EXPIRED,
+            verifiedAt: null,
+            issuedPassword: null
+          }
+        });
+
+        return {
+          ok: false as const,
+          status: 409,
+          message: "Verification request was superseded",
+          verification: publicPhoneVerificationRequest(expired)
+        };
+      }
+
+      let user:
+        | {
+            id: string;
+            phone: string;
+            fullName: string | null;
+            timeZone: string | null;
+            createdAt: Date;
+          }
+        | null = null;
+
+      if (request.purpose === PhoneVerificationPurpose.REGISTER) {
+        const existingUser = await tx.user.findUnique({
+          where: { phone: request.phone },
+          select: { id: true }
+        });
+
+        if (existingUser) {
+          const expired = await tx.phoneVerificationRequest.update({
+            where: { id: request.id },
+            data: {
+              status: PhoneVerificationStatus.EXPIRED,
+              verifiedAt: null,
+              issuedPassword: null
+            }
+          });
+
+          return {
+            ok: false as const,
+            status: 409,
+            message: "Phone already registered",
+            verification: publicPhoneVerificationRequest(expired)
+          };
+        }
+
+        user = await tx.user.create({
+          data: {
+            phone: request.phone,
+            fullName: request.fullName,
+            password: passwordHash,
+            rubleBalance: REGISTRATION_START_BALANCE_RUB,
+            rubleBalanceKopecks: REGISTRATION_START_BALANCE_KOPECKS,
+            minuteBalanceSeconds: 0
+          },
+          select: {
+            id: true,
+            phone: true,
+            fullName: true,
+            timeZone: true,
+            createdAt: true
+          }
+        });
+
+        await createDefaultProfiles(tx, user.id, user.phone);
+        await createStartingBalanceGrant(tx, user.id);
+      } else {
+        user = await tx.user.findUnique({
+          where: { phone: request.phone },
+          select: {
+            id: true,
+            phone: true,
+            fullName: true,
+            timeZone: true,
+            createdAt: true
+          }
+        });
+
+        if (!user) {
+          const expired = await tx.phoneVerificationRequest.update({
+            where: { id: request.id },
+            data: {
+              status: PhoneVerificationStatus.EXPIRED,
+              verifiedAt: null,
+              issuedPassword: null
+            }
+          });
+
+          return {
+            ok: false as const,
+            status: 404,
+            message: "User not found",
+            verification: publicPhoneVerificationRequest(expired)
+          };
+        }
+
+        user = await tx.user.update({
+          where: { id: user.id },
+          data: { password: passwordHash },
+          select: {
+            id: true,
+            phone: true,
+            fullName: true,
+            timeZone: true,
+            createdAt: true
+          }
+        });
+      }
+
+      const completedRequest = await tx.phoneVerificationRequest.update({
+        where: { id: request.id },
+        data: {
+          issuedPassword: null,
+          userId: user.id
+        }
+      });
+
+      return {
+        ok: true as const,
+        user,
+        verification: publicPhoneVerificationRequest(completedRequest)
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+  );
+
+  if (!result.ok) {
+    res.status(result.status).json({
+      message: result.message,
+      ...(result.verification ? { verification: result.verification } : {})
     });
     return;
   }
 
-  res.json(payload);
+  res.json({
+    token: createToken({ userId: result.user.id, phone: result.user.phone }),
+    user: publicUser(result.user),
+    verification: result.verification,
+    delivery: {
+      channel: "call_verification",
+      message: "Phone ownership was verified by an incoming call."
+    }
+  });
 });
 
 authRouter.put("/password", requireAuth, async (req, res) => {

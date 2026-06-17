@@ -13,6 +13,7 @@ import type {
   OutboundStats,
   PaymentTopUp,
   PhoneContactName,
+  PhoneVerificationCompleteResponse,
   PhoneVerificationStartResponse,
   PhoneVerificationStatusResponse,
   PromptEditHistoryItem,
@@ -91,6 +92,13 @@ export function forgotPassword(payload: { phone: string }) {
 
 export function getPhoneVerification(id: string) {
   return request<PhoneVerificationStatusResponse>(`/api/auth/phone-verification/${encodeURIComponent(id)}`);
+}
+
+export function completePhoneVerification(id: string, payload: { password: string }) {
+  return request<PhoneVerificationCompleteResponse>(`/api/auth/phone-verification/${encodeURIComponent(id)}/complete`, {
+    method: "POST",
+    body: payload
+  });
 }
 
 export function changePassword(token: string, password: string) {
