@@ -250,9 +250,12 @@ export function AuthPanel({ onAuthorized, className = "" }: AuthPanelProps) {
         )}
 
         {waitingForCall && (
-          <div className="code-box verification-box">
-            <span>Позвоните по номеру</span>
-            <strong>{formatPhoneForDisplay(verification.verificationNumber)}</strong>
+          <div className="code-box verification-box call-verification-box">
+            <div className="verification-call-main">
+              <span>Позвоните по номеру</span>
+              <strong>{formatPhoneForDisplay(verification.verificationNumber)}</strong>
+            </div>
+            <span className="verification-note">Это звонок-сброс. Для подтверждения вашего номера телефона.</span>
           </div>
         )}
 
