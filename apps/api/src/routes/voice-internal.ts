@@ -209,7 +209,7 @@ function mapProfileToVoiceConfig(
     maxDialogSeconds,
     forwardAfterMs: profile.forwardingEnabled ? maxDialogSeconds * 1000 : 0,
     transcriptionModel: "gpt-4o-transcribe",
-    maxResponseOutputTokens: 400,
+    maxResponseOutputTokens: 800,
     turnDetection: {
       threshold: 0.6,
       silenceDurationMs: 400,
