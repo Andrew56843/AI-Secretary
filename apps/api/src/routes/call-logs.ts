@@ -1,5 +1,5 @@
 import { CallDirection, CallStatus, Prisma } from "@prisma/client";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
@@ -79,6 +79,15 @@ function resolveRecordingPath(recordingUrl: string | null | undefined) {
   return insideRoot ? resolved : null;
 }
 
+function preferPlaybackRecording(recordingPath: string) {
+  if (path.basename(recordingPath) !== "talk_8k_stereo.wav") {
+    return recordingPath;
+  }
+
+  const playbackPath = path.join(path.dirname(recordingPath), "talk_8k_playback.wav");
+  return existsSync(playbackPath) ? playbackPath : recordingPath;
+}
+
 function parseRangeHeader(rangeHeader: string | undefined, fileSize: number) {
   if (!rangeHeader?.startsWith("bytes=")) {
     return null;
@@ -153,7 +162,8 @@ callLogsRouter.get("/:id/recording", requireAuth, async (req, res) => {
     select: { recordingUrl: true }
   });
 
-  const recordingPath = resolveRecordingPath(log?.recordingUrl);
+  const resolvedRecordingPath = resolveRecordingPath(log?.recordingUrl);
+  const recordingPath = resolvedRecordingPath ? preferPlaybackRecording(resolvedRecordingPath) : null;
   if (!recordingPath) {
     res.status(404).json({ message: "Recording not found" });
     return;
