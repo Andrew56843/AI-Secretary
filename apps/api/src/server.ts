@@ -3,6 +3,7 @@ import express from "express";
 import { env } from "./config.js";
 import { prisma } from "./lib/prisma.js";
 import { authRouter } from "./routes/auth.js";
+import { adminRouter } from "./routes/admin.js";
 import { billingRouter } from "./routes/billing.js";
 import { callLogsRouter } from "./routes/call-logs.js";
 import { callsRouter } from "./routes/calls.js";
@@ -27,6 +28,7 @@ app.get("/healthz", async (_req, res) => {
   res.json({ ok: true, service: "ai-secretary-api" });
 });
 
+app.use("/api/admin", adminRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/billing", billingRouter);
 app.use("/api/calls", callsRouter);

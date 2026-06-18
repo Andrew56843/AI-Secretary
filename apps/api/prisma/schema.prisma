@@ -244,6 +244,7 @@ enum BillingTransactionType {
   TOP_UP
   NUMBER_PURCHASE
   CALL_CHARGE
+  ADMIN_ADJUSTMENT
 }
 
 enum IntegrationStatus {

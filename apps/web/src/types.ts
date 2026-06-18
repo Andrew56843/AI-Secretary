@@ -150,7 +150,7 @@ export type CallLogsPagination = OutboundPagination;
 
 export type BillingTransaction = {
   id: string;
-  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE";
+  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE" | "ADMIN_ADJUSTMENT";
   amountSeconds: number;
   amountRub?: number | null;
   amountKopecks?: number | null;
@@ -205,4 +205,22 @@ export type PromptEditHistoryItem = {
   command: string;
   beforePrompt: string;
   afterPrompt: string;
+};
+
+export type AdminUser = {
+  id: string;
+  phone: string;
+  fullName?: string | null;
+  timeZone: string;
+  rubleBalance: number;
+  rubleBalanceKopecks: number;
+  numberRentExpiresAt?: string | null;
+  reservedNumber?: ReservedPhoneNumber | null;
+  telegramStatus: "DISCONNECTED" | "CONNECTED";
+  googleStatus: "DISCONNECTED" | "CONNECTED";
+  profilesCount: number;
+  outboundContactsCount: number;
+  billingTransactionsCount: number;
+  createdAt: string;
+  updatedAt: string;
 };

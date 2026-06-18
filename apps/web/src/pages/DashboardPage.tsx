@@ -473,6 +473,10 @@ function formatBillingTitle(transaction: BillingTransaction) {
     return "Резервация номера";
   }
 
+  if (transaction.type === "ADMIN_ADJUSTMENT") {
+    return "Корректировка баланса";
+  }
+
   return "Стартовый лимит";
 }
 

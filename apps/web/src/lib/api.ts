@@ -1,5 +1,6 @@
 import type {
   AssistantProfile,
+  AdminUser,
   BillingPagination,
   AuthResponse,
   BillingState,
@@ -332,5 +333,34 @@ export function deleteOutboundContact(token: string, contactId: string) {
   return request<void>(`/api/outbound/contacts/${contactId}`, {
     token,
     method: "DELETE"
+  });
+}
+
+export function getAdminUsers(token: string, search?: string) {
+  const query = new URLSearchParams();
+  if (search?.trim()) {
+    query.set("search", search.trim());
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<{ users: AdminUser[] }>(`/api/admin/users${suffix}`, { token });
+}
+
+export function adjustAdminUserBalance(
+  token: string,
+  userId: string,
+  payload: { operation: "increase" | "decrease"; amountRub: number; note?: string }
+) {
+  return request<{ user: AdminUser }>(`/api/admin/users/${userId}/balance`, {
+    token,
+    method: "POST",
+    body: payload
+  });
+}
+
+export function impersonateAdminUser(token: string, userId: string) {
+  return request<AuthResponse>(`/api/admin/users/${userId}/impersonate`, {
+    token,
+    method: "POST"
   });
 }
