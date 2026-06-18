@@ -133,19 +133,47 @@ async function tgFetch(method, params = {}) {
   });
   return r.json();
 }
-async function sendTelegram(text) {
-  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+async function sendTelegramDocument(chatId, text, fileName = 'call-transcript.txt') {
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  form.append('caption', 'call end\nТранскрипт во вложении.');
+  form.append('document', new Blob([String(text || '')], { type: 'text/plain;charset=utf-8' }), fileName);
+
+  const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendDocument`;
+  const response = await fetch(url, {
+    method: 'POST',
+    body: form,
+  });
+  return response.json();
+}
+
+async function sendTelegram(text, chatId = CONFIG.telegramChatId, fileName = 'call-transcript.txt') {
+  if (!CONFIG.telegramBotToken || !chatId) return;
 
   try {
-    for (const chunk of splitTelegramText(text)) {
+    const clean = String(text || '');
+    if (clean.length <= 3900) {
       await tgFetch("sendMessage", {
-        chat_id: CONFIG.telegramChatId,
-        text: chunk,
+        chat_id: chatId,
+        text: clean,
       });
+      return;
     }
+
+    await sendTelegramDocument(chatId, clean, fileName);
   } catch (e) {
     console.log("TG send error:", String(e?.message || e));
   }
+}
+
+function getTelegramTargetFromConfig(clientCfg) {
+  const telegram = clientCfg?.account?.telegram || null;
+  if (telegram?.chatId) return String(telegram.chatId);
+  if (telegram?.username) {
+    const username = String(telegram.username);
+    return username.startsWith('@') ? username : `@${username}`;
+  }
+  return CONFIG.telegramChatId || '';
 }
 
 function splitTelegramText(text, limit = 3900) {
@@ -1144,7 +1172,6 @@ const metadataServer = http.createServer(async (req, res) => {
       log('[META]', `saved uuid=${saved?.uuid || '-'} did=${saved?.did || '-'} callerId=${saved?.callerId || '-'} clientId=${saved?.clientId || '-'}`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
-      sendTelegram("call " + saved?.callerId);
       return;
     }
 
@@ -1531,7 +1558,7 @@ const audioServer = net.createServer((socket) => {
       summary.logs.processedError = null;
       summary.logs.processedAt = nowIso();
       persistMeta();
-      await sendTelegram(telegramText);
+      await sendTelegram(telegramText, getTelegramTargetFromConfig(clientCfg), `call-${summary.uuid || Date.now()}.txt`);
     }).catch(async (err) => {
       const message = String(err?.message || err);
       logErr('[POSTCALL]', message);
@@ -1542,7 +1569,11 @@ const audioServer = net.createServer((socket) => {
         fs.writeFileSync(processedTranscriptPath, fallbackText + '\n', 'utf8');
       }
       persistMeta();
-      await sendTelegram(`${fallbackText}\n\n[post-call log processing failed: ${message}]`);
+      await sendTelegram(
+          `${fallbackText}\n\n[post-call log processing failed: ${message}]`,
+          getTelegramTargetFromConfig(clientCfg),
+          `call-${summary.uuid || Date.now()}.txt`
+      );
     });
   }
 

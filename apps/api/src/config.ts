@@ -28,6 +28,7 @@ const envSchema = z.object({
   CALL_RECORDINGS_ROOT: z.string().trim().min(1).default("/home/andrew/ai/records"),
   PHONE_VERIFICATION_CALL_NUMBER: z.string().trim().min(1).default("+79952225212"),
   PHONE_VERIFICATION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  TELEGRAM_BOT_TOKEN: optionalString,
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()

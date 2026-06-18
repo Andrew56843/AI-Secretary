@@ -338,6 +338,7 @@ integrationsRouter.post("/telegram/disconnect", requireAuth, async (req, res) =>
     where: { id: base.id },
     data: {
       status: "DISCONNECTED",
+      linkToken: randomUUID(),
       chatId: null,
       username: null,
       connectedAt: null

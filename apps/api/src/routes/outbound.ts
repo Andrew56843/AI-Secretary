@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createBillableCallLog } from "../lib/billable-call.js";
 import { extractPhones } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
+import { deliverTelegramTranscript } from "../lib/telegram.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const outboundRouter = Router();
@@ -218,7 +219,9 @@ outboundRouter.post("/contacts/:id/mock-call", requireAuth, async (req, res) => 
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
     );
 
-    res.status(201).json(result);
+    const deliveredLog = await deliverTelegramTranscript(result.log.id);
+
+    res.status(201).json({ ...result, log: deliveredLog ?? result.log });
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_MINUTES") {
       res.status(402).json({ message: "Not enough minutes. Top up balance to continue calls." });

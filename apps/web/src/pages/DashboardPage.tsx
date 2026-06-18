@@ -604,6 +604,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [testingCall, setTestingCall] = useState(false);
   const [topUpSaving, setTopUpSaving] = useState(false);
   const [numberRentalSaving, setNumberRentalSaving] = useState(false);
+  const [telegramToggling, setTelegramToggling] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState("1000");
   const [previewingVoice, setPreviewingVoice] = useState<RealtimeVoice | null>(null);
   const [form, setForm] = useState<ProfileForm>(() => defaultForm("inbound"));
@@ -613,6 +614,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   });
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const voicePreviewRequestIdRef = useRef(0);
+  const telegramPollGenerationRef = useRef(0);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -1101,13 +1103,20 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   }
 
   async function handleTelegramToggle() {
+    if (telegramToggling) {
+      return;
+    }
+
+    setTelegramToggling(true);
     setError(null);
     setNotice(null);
 
     try {
       if (integrations?.telegram.status === "CONNECTED") {
+        telegramPollGenerationRef.current += 1;
         const response = await disconnectTelegram(token);
         setIntegrations((prev) => ({ google: prev!.google, telegram: response.telegram }));
+        setTelegramToggling(false);
         setNotice("Telegram отключен");
         return;
       }
@@ -1115,22 +1124,34 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       const response = await getTelegramLink(token);
       setIntegrations((prev) => ({ google: prev!.google, telegram: response.telegram }));
       if (response.telegram.botLink) {
+        const pollGeneration = ++telegramPollGenerationRef.current;
         window.open(response.telegram.botLink, "_blank", "noopener,noreferrer");
         setNotice("Открыл Telegram для подключения");
-        void waitForTelegramConnection();
+        void waitForTelegramConnection(pollGeneration);
+        setTelegramToggling(false);
         return;
       }
+      setTelegramToggling(false);
       setNotice("Telegram готов к подключению");
     } catch (connectError) {
+      setTelegramToggling(false);
       setError(connectError instanceof Error ? connectError.message : "Не удалось переключить Telegram");
     }
   }
 
-  async function waitForTelegramConnection() {
+  async function waitForTelegramConnection(pollGeneration: number) {
     try {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         await delay(2000);
+        if (telegramPollGenerationRef.current !== pollGeneration) {
+          return;
+        }
+
         const response = await getIntegrations(token);
+        if (telegramPollGenerationRef.current !== pollGeneration) {
+          return;
+        }
+
         setIntegrations(response.integrations);
 
         if (response.integrations.telegram.status === "CONNECTED") {
@@ -1602,7 +1623,13 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                     <p>AI секретарь сможет создавать и переносить записи в календаре, а телефон, планшет и ПК синхронизируют изменения автоматически.</p>
                   </div>
                 </div>
-                <button className="outline-btn integration-button" type="button" onClick={handleGoogleToggle}>
+                <button
+                  className={`outline-btn integration-button ${
+                    integrations?.google.status === "CONNECTED" ? "integration-button-danger" : "integration-button-success"
+                  }`}
+                  type="button"
+                  onClick={handleGoogleToggle}
+                >
                   {integrations?.google.status === "CONNECTED" ? "Отключить" : "Подключить"}
                 </button>
               </article>
@@ -1614,7 +1641,14 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                     <p>Транскрибы входящих и исходящих разговоров будут приходить в Telegram после каждого звонка.</p>
                   </div>
                 </div>
-                <button className="outline-btn integration-button" type="button" onClick={handleTelegramToggle}>
+                <button
+                  className={`outline-btn integration-button ${
+                    integrations?.telegram.status === "CONNECTED" ? "integration-button-danger" : "integration-button-success"
+                  }`}
+                  type="button"
+                  onClick={handleTelegramToggle}
+                  disabled={telegramToggling}
+                >
                   {integrations?.telegram.status === "CONNECTED" ? "Отключить" : "Подключить"}
                 </button>
               </article>

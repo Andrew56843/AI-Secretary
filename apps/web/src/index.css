@@ -1763,6 +1763,30 @@ label {
   padding: 0 0.75rem;
 }
 
+.integration-button-success {
+  border-color: #9bd8b4;
+  background: #eaf8ef;
+  color: #0a6b3c;
+}
+
+.integration-button-success:hover {
+  border-color: #73c797;
+  background: #d8f1e2;
+  color: #075a32;
+}
+
+.integration-button-danger {
+  border-color: #efb1aa;
+  background: #fff0ee;
+  color: #a8342a;
+}
+
+.integration-button-danger:hover {
+  border-color: #e48c82;
+  background: #ffe2de;
+  color: #8c271f;
+}
+
 .integration-icon {
   width: 1.15rem;
   height: 1.15rem;

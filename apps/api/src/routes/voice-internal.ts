@@ -14,6 +14,7 @@ import {
   publicPhoneVerificationRequest
 } from "../lib/phone-verification.js";
 import { prisma } from "../lib/prisma.js";
+import { deliverTelegramTranscript } from "../lib/telegram.js";
 
 const voiceInternalRouter = Router();
 
@@ -720,7 +721,9 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
       });
     }
 
-    res.status(201).json({ ok: true, log: result.log, outbound: result.outbound });
+    const deliveredLog = await deliverTelegramTranscript(result.log.id);
+
+    res.status(201).json({ ok: true, log: deliveredLog ?? result.log, outbound: result.outbound });
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
       res.status(402).json({ message: "Not enough balance to save a billable call log" });

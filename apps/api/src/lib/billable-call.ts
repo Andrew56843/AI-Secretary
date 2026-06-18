@@ -136,7 +136,7 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
         userId: input.userId,
         callLogId: log.id,
         channel: TranscriptChannel.TELEGRAM,
-        status: TranscriptDeliveryStatus.SENT,
+        status: TranscriptDeliveryStatus.PENDING,
         target,
         payloadPreview: `${input.summary}\n${input.transcript}`.slice(0, 700)
       }
