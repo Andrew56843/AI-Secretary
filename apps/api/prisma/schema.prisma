@@ -114,7 +114,7 @@ model BillingTransaction {
   type          BillingTransactionType
   amountSeconds Int
   amountRub     Int?
-  amountKopecks Int?
+  amountKopecks Int                    @default(0)
   note          String?
   createdAt     DateTime               @default(now())
 

@@ -153,7 +153,7 @@ export type BillingTransaction = {
   type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE" | "ADMIN_ADJUSTMENT";
   amountSeconds: number;
   amountRub?: number | null;
-  amountKopecks?: number | null;
+  amountKopecks: number;
   note?: string | null;
   createdAt: string;
 };

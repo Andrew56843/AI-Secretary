@@ -3,9 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   createDefaultProfiles,
-  createStartingBalanceGrant,
-  REGISTRATION_START_BALANCE_KOPECKS,
-  REGISTRATION_START_BALANCE_RUB
+  createStartingBalanceGrant
 } from "../lib/account-provisioning.js";
 import { comparePassword, createToken, hashPassword } from "../lib/auth.js";
 import { isValidPhone, normalizePhone } from "../lib/phone.js";
@@ -272,8 +270,8 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
             phone: request.phone,
             fullName: request.fullName,
             password: passwordHash,
-            rubleBalance: REGISTRATION_START_BALANCE_RUB,
-            rubleBalanceKopecks: REGISTRATION_START_BALANCE_KOPECKS,
+            rubleBalance: 0,
+            rubleBalanceKopecks: 0,
             minuteBalanceSeconds: 0
           },
           select: {

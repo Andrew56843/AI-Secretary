@@ -1,6 +1,7 @@
 import { BillingTransactionType, CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
+import { assertLedgerBalanceAtLeast, createBalanceLedgerEntry } from "../lib/balance-ledger.js";
 import { billingAmountRub, kopecksToRubles, rublesToKopecks } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -12,7 +13,12 @@ const NUMBER_RENT_PRICE_KOPECKS = rublesToKopecks(NUMBER_RENT_PRICE_RUB);
 const NUMBER_RENT_PERIOD_DAYS = 30;
 const NUMBER_RENEWAL_WINDOW_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const BILLING_CHARGE_TYPES = [BillingTransactionType.CALL_CHARGE, BillingTransactionType.NUMBER_PURCHASE];
+const BILLING_HISTORY_TYPES = [
+  BillingTransactionType.CALL_CHARGE,
+  BillingTransactionType.NUMBER_PURCHASE,
+  BillingTransactionType.ADMIN_ADJUSTMENT,
+  BillingTransactionType.TOP_UP
+];
 const CLOUDTIPS_PAYMENT_URL = "https://pay.cloudtips.ru/p/73767f54";
 
 const topUpSchema = z.object({
@@ -65,7 +71,7 @@ function createCloudTipsPaymentUrl(amountRub: number, userId: string) {
 
 type BillingTransactionWithMoney = {
   amountRub: number | null;
-  amountKopecks: number | null;
+  amountKopecks: number;
 };
 
 function serializeBillingTransaction<T extends BillingTransactionWithMoney>(transaction: T) {
@@ -79,16 +85,12 @@ async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
   const user = await tx.user.findUniqueOrThrow({
     where: { id: userId },
     select: {
-      rubleBalance: true,
-      rubleBalanceKopecks: true,
       numberPurchasedAt: true,
       numberRentExpiresAt: true
     }
   });
 
-  if (user.rubleBalanceKopecks < NUMBER_RENT_PRICE_KOPECKS) {
-    throw new Error("INSUFFICIENT_BALANCE");
-  }
+  await assertLedgerBalanceAtLeast(tx, userId, NUMBER_RENT_PRICE_KOPECKS);
 
   const inboundProfile = await tx.assistantProfile.findUnique({
     where: { userId_mode: { userId, mode: CallDirection.INBOUND } },
@@ -134,34 +136,26 @@ async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
   await tx.user.update({
     where: { id: userId },
     data: {
-      rubleBalance: { decrement: NUMBER_RENT_PRICE_RUB },
-      rubleBalanceKopecks: { decrement: NUMBER_RENT_PRICE_KOPECKS },
       numberPurchasedAt: user.numberPurchasedAt ?? now,
       numberRentExpiresAt
     }
   });
 
-  await tx.billingTransaction.create({
-    data: {
-      userId,
-      type: "NUMBER_PURCHASE",
-      amountSeconds: 0,
-      amountRub: -NUMBER_RENT_PRICE_RUB,
-      amountKopecks: -NUMBER_RENT_PRICE_KOPECKS,
-      note: `${isNewRent ? "Reserved" : "Renewed"} phone number ${number?.number ?? ""}`.trim()
-    }
+  await createBalanceLedgerEntry(tx, {
+    userId,
+    type: BillingTransactionType.NUMBER_PURCHASE,
+    amountKopecks: -NUMBER_RENT_PRICE_KOPECKS,
+    note: `${isNewRent ? "Reserved" : "Renewed"} phone number ${number?.number ?? ""}`.trim()
   });
 
   return number;
 }
 
 async function getBillingState(userId: string) {
-  const [user, inboundProfile, transactions] = await Promise.all([
+  const [user, inboundProfile, transactions, ledgerBalance] = await Promise.all([
     prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: {
-        rubleBalance: true,
-        rubleBalanceKopecks: true,
         minuteBalanceSeconds: true,
         totalPurchasedSeconds: true,
         numberPurchasedAt: true,
@@ -176,11 +170,15 @@ async function getBillingState(userId: string) {
       where: { userId },
       orderBy: { createdAt: "desc" },
       take: 12
+    }),
+    prisma.billingTransaction.aggregate({
+      where: { userId },
+      _sum: { amountKopecks: true }
     })
   ]);
 
   return {
-    rubleBalance: kopecksToRubles(user.rubleBalanceKopecks),
+    rubleBalance: kopecksToRubles(ledgerBalance._sum.amountKopecks ?? 0),
     minuteBalanceSeconds: user.minuteBalanceSeconds,
     totalPurchasedSeconds: user.totalPurchasedSeconds,
     numberPurchasedAt: user.numberPurchasedAt,
@@ -208,7 +206,7 @@ billingRouter.get("/charges", requireAuth, async (req, res) => {
   const where = {
     userId: req.user!.userId,
     type: {
-      in: BILLING_CHARGE_TYPES
+      in: BILLING_HISTORY_TYPES
     }
   };
   const total = await prisma.billingTransaction.count({ where });

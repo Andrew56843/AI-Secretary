@@ -1,4 +1,5 @@
-import { CallDirection, type Prisma } from "@prisma/client";
+import { BillingTransactionType, CallDirection, type Prisma } from "@prisma/client";
+import { createBalanceLedgerEntry } from "./balance-ledger.js";
 import { rublesToKopecks } from "./money.js";
 
 export const REGISTRATION_START_BALANCE_RUB = 100;
@@ -42,14 +43,10 @@ export async function createDefaultProfiles(tx: Prisma.TransactionClient, userId
 }
 
 export async function createStartingBalanceGrant(tx: Prisma.TransactionClient, userId: string) {
-  await tx.billingTransaction.create({
-    data: {
-      userId,
-      type: "FREE_GRANT",
-      amountSeconds: 0,
-      amountRub: REGISTRATION_START_BALANCE_RUB,
-      amountKopecks: REGISTRATION_START_BALANCE_KOPECKS,
-      note: "Registration starting balance"
-    }
+  await createBalanceLedgerEntry(tx, {
+    userId,
+    type: BillingTransactionType.FREE_GRANT,
+    amountKopecks: REGISTRATION_START_BALANCE_KOPECKS,
+    note: "Registration starting balance"
   });
 }

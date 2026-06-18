@@ -1890,15 +1890,15 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setBillingHistoryOpen(false)}>
           <section className="modal-panel history-modal" role="dialog" aria-modal="true" aria-labelledby="billing-history-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="panel-title">
-              <h2 id="billing-history-title">История списаний</h2>
+              <h2 id="billing-history-title">История баланса</h2>
               <button className="icon-mini-btn" type="button" aria-label="Закрыть" onClick={() => setBillingHistoryOpen(false)}>
                 ×
               </button>
             </div>
 
             <div className="history-list">
-              {billingHistoryLoading && <p className="empty-state">Загружаю списания...</p>}
-              {!billingHistoryLoading && billingHistory.length === 0 && <p className="empty-state">Списаний пока нет.</p>}
+              {billingHistoryLoading && <p className="empty-state">Загружаю операции...</p>}
+              {!billingHistoryLoading && billingHistory.length === 0 && <p className="empty-state">Операций пока нет.</p>}
 
               {!billingHistoryLoading &&
                 billingHistory.map((transaction) => (

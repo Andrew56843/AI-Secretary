@@ -6,7 +6,8 @@ import {
   TranscriptChannel,
   TranscriptDeliveryStatus
 } from "@prisma/client";
-import { legacyWholeRublesFromKopecks, rublesToKopecks } from "./money.js";
+import { createBalanceLedgerEntry } from "./balance-ledger.js";
+import { rublesToKopecks } from "./money.js";
 
 type BillableCallInput = {
   userId: string;
@@ -57,7 +58,6 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       user: {
         select: {
           id: true,
-          rubleBalanceKopecks: true,
           telegramAccount: {
             select: {
               status: true,
@@ -81,27 +81,12 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
   const rateRubPerMinute = directionRates[realtimeModel] ?? DEFAULT_RATE_RUB_PER_MINUTE[input.direction];
   const amountKopecks = calculateCallChargeKopecks(input.durationSeconds, rateRubPerMinute);
 
-  if (profile.user.rubleBalanceKopecks < amountKopecks) {
-    throw new Error("INSUFFICIENT_BALANCE");
-  }
-
-  const legacyAmountRub = Math.ceil(amountKopecks / 100);
-
-  const updatedUser = await tx.user.update({
-    where: { id: input.userId },
-    data: {
-      rubleBalanceKopecks: { decrement: amountKopecks }
-    },
-    select: {
-      rubleBalanceKopecks: true
-    }
-  });
-
-  await tx.user.update({
-    where: { id: input.userId },
-    data: {
-      rubleBalance: legacyWholeRublesFromKopecks(updatedUser.rubleBalanceKopecks)
-    }
+  await createBalanceLedgerEntry(tx, {
+    userId: input.userId,
+    type: BillingTransactionType.CALL_CHARGE,
+    amountSeconds: -input.durationSeconds,
+    amountKopecks: -amountKopecks,
+    note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`
   });
 
   const log = await tx.callLog.create({
@@ -114,17 +99,6 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       summary: input.summary,
       transcript: input.transcript,
       recordingUrl: input.recordingUrl
-    }
-  });
-
-  await tx.billingTransaction.create({
-    data: {
-      userId: input.userId,
-      type: BillingTransactionType.CALL_CHARGE,
-      amountSeconds: -input.durationSeconds,
-      amountRub: -legacyAmountRub,
-      amountKopecks: -amountKopecks,
-      note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`
     }
   });
 

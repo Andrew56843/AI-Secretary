@@ -2,8 +2,9 @@ import { BillingTransactionType, Prisma } from "@prisma/client";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
+import { createBalanceLedgerEntry } from "../lib/balance-ledger.js";
 import { createToken } from "../lib/auth.js";
-import { kopecksToRubles, legacyWholeRublesFromKopecks, rublesToKopecks } from "../lib/money.js";
+import { kopecksToRubles, rublesToKopecks } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
@@ -55,7 +56,8 @@ function publicAdminUser(
       profiles: { include: { reservedNumber: true } };
       _count: { select: { outboundContacts: true; billingTransactions: true } };
     };
-  }>
+  }>,
+  ledgerBalanceKopecks = user.rubleBalanceKopecks
 ) {
   const reservedNumber = user.profiles.find((profile) => profile.reservedNumber)?.reservedNumber ?? null;
 
@@ -64,8 +66,8 @@ function publicAdminUser(
     phone: user.phone,
     fullName: user.fullName,
     timeZone: user.timeZone,
-    rubleBalance: kopecksToRubles(user.rubleBalanceKopecks),
-    rubleBalanceKopecks: user.rubleBalanceKopecks,
+    rubleBalance: kopecksToRubles(ledgerBalanceKopecks),
+    rubleBalanceKopecks: ledgerBalanceKopecks,
     numberRentExpiresAt: user.numberRentExpiresAt,
     reservedNumber,
     telegramStatus: user.telegramAccount?.status ?? "DISCONNECTED",
@@ -78,18 +80,38 @@ function publicAdminUser(
   };
 }
 
-async function getAdminUserById(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      telegramAccount: true,
-      googleAccount: true,
-      profiles: { include: { reservedNumber: true } },
-      _count: { select: { outboundContacts: true, billingTransactions: true } }
-    }
+async function getLedgerBalanceMap(userIds: string[]) {
+  if (userIds.length === 0) {
+    return new Map<string, number>();
+  }
+
+  const balances = await prisma.billingTransaction.groupBy({
+    by: ["userId"],
+    where: { userId: { in: userIds } },
+    _sum: { amountKopecks: true }
   });
 
-  return user ? publicAdminUser(user) : null;
+  return new Map(balances.map((item) => [item.userId, item._sum.amountKopecks ?? 0]));
+}
+
+async function getAdminUserById(userId: string) {
+  const [user, ledgerBalance] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        telegramAccount: true,
+        googleAccount: true,
+        profiles: { include: { reservedNumber: true } },
+        _count: { select: { outboundContacts: true, billingTransactions: true } }
+      }
+    }),
+    prisma.billingTransaction.aggregate({
+      where: { userId },
+      _sum: { amountKopecks: true }
+    })
+  ]);
+
+  return user ? publicAdminUser(user, ledgerBalance._sum.amountKopecks ?? 0) : null;
 }
 
 adminRouter.use(requireAuth, requireAdmin);
@@ -123,7 +145,9 @@ adminRouter.get("/users", async (req, res) => {
     take: 200
   });
 
-  res.json({ users: users.map(publicAdminUser) });
+  const ledgerBalances = await getLedgerBalanceMap(users.map((user) => user.id));
+
+  res.json({ users: users.map((user) => publicAdminUser(user, ledgerBalances.get(user.id) ?? 0)) });
 });
 
 adminRouter.post("/users/:id/impersonate", async (req, res) => {
@@ -166,35 +190,18 @@ adminRouter.post("/users/:id/balance", async (req, res) => {
       async (tx) => {
         const user = await tx.user.findUnique({
           where: { id: parsedParams.data.id },
-          select: { id: true, rubleBalanceKopecks: true, phone: true }
+          select: { id: true, phone: true }
         });
 
         if (!user) {
           throw new Error("USER_NOT_FOUND");
         }
 
-        const nextBalanceKopecks = user.rubleBalanceKopecks + signedAmountKopecks;
-        if (nextBalanceKopecks < 0) {
-          throw new Error("NEGATIVE_BALANCE");
-        }
-
-        await tx.user.update({
-          where: { id: user.id },
-          data: {
-            rubleBalanceKopecks: nextBalanceKopecks,
-            rubleBalance: legacyWholeRublesFromKopecks(nextBalanceKopecks)
-          }
-        });
-
-        await tx.billingTransaction.create({
-          data: {
-            userId: user.id,
-            type: BillingTransactionType.ADMIN_ADJUSTMENT,
-            amountSeconds: 0,
-            amountRub: Math.trunc(kopecksToRubles(signedAmountKopecks)),
-            amountKopecks: signedAmountKopecks,
-            note: parsedBody.data.note || `Admin balance adjustment for ${user.phone}`
-          }
+        await createBalanceLedgerEntry(tx, {
+          userId: user.id,
+          type: BillingTransactionType.ADMIN_ADJUSTMENT,
+          amountKopecks: signedAmountKopecks,
+          note: parsedBody.data.note || `Admin balance adjustment for ${user.phone}`
         });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
@@ -207,7 +214,7 @@ adminRouter.post("/users/:id/balance", async (req, res) => {
       res.status(404).json({ message: "User not found" });
       return;
     }
-    if (error instanceof Error && error.message === "NEGATIVE_BALANCE") {
+    if (error instanceof Error && (error.message === "NEGATIVE_BALANCE" || error.message === "INSUFFICIENT_BALANCE")) {
       res.status(400).json({ message: "Balance cannot become negative" });
       return;
     }
