@@ -91,8 +91,10 @@ if (!CONFIG.openAiProxyUrl) {
   console.warn('[BOOT] OPENAI_PROXY_URL is empty. Realtime traffic will not be opened without proxy.');
 }
 
-if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
-  console.warn('[BOOT] Telegram is not configured. Call summaries will not be sent.');
+if (!CONFIG.telegramBotToken) {
+  console.warn('[BOOT] TELEGRAM_BOT_TOKEN is empty. Call summaries will not be sent.');
+} else if (!CONFIG.telegramChatId) {
+  console.warn('[BOOT] TELEGRAM_CHAT_ID is empty. Only linked account chat ids will receive call summaries.');
 }
 
 const proxyAgent = CONFIG.openAiProxyUrl
