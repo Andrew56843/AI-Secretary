@@ -300,6 +300,98 @@ const DEFAULT_CALL_LOGS_PAGINATION: CallLogsPagination = {
   hasNextPage: false
 };
 
+function getPaginationPages(page: number, totalPages: number) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set([1, totalPages, page - 1, page, page + 1]);
+  if (page <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+  if (page >= totalPages - 2) {
+    pages.add(totalPages - 3);
+    pages.add(totalPages - 2);
+    pages.add(totalPages - 1);
+  }
+
+  const sortedPages = [...pages].filter((item) => item >= 1 && item <= totalPages).sort((a, b) => a - b);
+  const result: Array<number | "ellipsis"> = [];
+
+  for (const item of sortedPages) {
+    const previous = result[result.length - 1];
+    if (typeof previous === "number" && item - previous > 1) {
+      result.push("ellipsis");
+    }
+    result.push(item);
+  }
+
+  return result;
+}
+
+function PaginationControl({
+  pagination,
+  loading,
+  onPageChange
+}: {
+  pagination: OutboundPagination;
+  loading?: boolean;
+  onPageChange: (page: number) => void;
+}) {
+  if (pagination.totalPages <= 1) {
+    return null;
+  }
+
+  const pages = getPaginationPages(pagination.page, pagination.totalPages);
+
+  return (
+    <nav className="pagination-row" aria-label="Пагинация">
+      <button
+        className="pagination-arrow"
+        type="button"
+        aria-label="Предыдущая страница"
+        disabled={loading || !pagination.hasPreviousPage}
+        onClick={() => onPageChange(pagination.page - 1)}
+      >
+        ‹
+      </button>
+
+      <div className="pagination-pages">
+        {pages.map((item, index) =>
+          item === "ellipsis" ? (
+            <span className="pagination-ellipsis" key={`ellipsis-${index}`}>
+              …
+            </span>
+          ) : (
+            <button
+              className={`pagination-page ${item === pagination.page ? "active" : ""}`}
+              type="button"
+              key={item}
+              aria-current={item === pagination.page ? "page" : undefined}
+              disabled={loading || item === pagination.page}
+              onClick={() => onPageChange(item)}
+            >
+              {item}
+            </button>
+          )
+        )}
+      </div>
+
+      <button
+        className="pagination-arrow"
+        type="button"
+        aria-label="Следующая страница"
+        disabled={loading || !pagination.hasNextPage}
+        onClick={() => onPageChange(pagination.page + 1)}
+      >
+        ›
+      </button>
+    </nav>
+  );
+}
+
 function TelegramIcon() {
   return (
     <svg aria-hidden="true" className="integration-icon telegram-icon" viewBox="0 0 24 24">
@@ -411,6 +503,16 @@ function formatStatus(status: CallLog["status"] | OutboundContact["status"]) {
   };
 
   return labels[status] ?? status;
+}
+
+function formatDeliveryStatus(status: string) {
+  const labels: Record<string, string> = {
+    SENT: "отправлено",
+    PENDING: "ожидает",
+    FAILED: "ошибка"
+  };
+
+  return labels[status] ?? status.toLowerCase();
 }
 
 function formatRubles(amount: number) {
@@ -1704,27 +1806,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 ))}
               </div>
 
-              <div className="pagination-row">
-                <button
-                  className="outline-btn small-btn"
-                  type="button"
-                  disabled={outboundPageLoading || !outboundPagination.hasPreviousPage}
-                  onClick={() => void refreshOutboundContacts(outboundPagination.page - 1)}
-                >
-                  Назад
-                </button>
-                <span>
-                  Страница {outboundPagination.page} из {outboundPagination.totalPages}
-                </span>
-                <button
-                  className="outline-btn small-btn"
-                  type="button"
-                  disabled={outboundPageLoading || !outboundPagination.hasNextPage}
-                  onClick={() => void refreshOutboundContacts(outboundPagination.page + 1)}
-                >
-                  Вперёд
-                </button>
-              </div>
+              <PaginationControl
+                pagination={outboundPagination}
+                loading={outboundPageLoading}
+                onPageChange={(page) => void refreshOutboundContacts(page)}
+              />
             </section>
           )}
         </aside>
@@ -1762,8 +1848,8 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 </div>
                 <p>{log.summary ?? "Без краткого описания"}</p>
                 {telegramDelivery && (
-                  <span className={`delivery ${telegramDelivery.status.toLowerCase()}`}>
-                    Telegram: {telegramDelivery.status}
+                  <span className={`delivery ${telegramDelivery.status.toLowerCase()}`} title={telegramDelivery.payloadPreview ?? undefined}>
+                    Telegram: {formatDeliveryStatus(telegramDelivery.status)}
                   </span>
                 )}
                 {log.recordingUrl && <CallRecordingPlayer token={token} logId={log.id} />}
@@ -1777,29 +1863,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           })}
         </div>
 
-        {activeLogsPagination.totalPages > 1 && (
-          <div className="pagination-row">
-            <button
-              className="outline-btn small-btn"
-              type="button"
-              disabled={logsPageLoading || !activeLogsPagination.hasPreviousPage}
-              onClick={() => void refreshLogs(activeMode, activeLogsPagination.page - 1)}
-            >
-              Назад
-            </button>
-            <span>
-              Страница {activeLogsPagination.page} из {activeLogsPagination.totalPages}
-            </span>
-            <button
-              className="outline-btn small-btn"
-              type="button"
-              disabled={logsPageLoading || !activeLogsPagination.hasNextPage}
-              onClick={() => void refreshLogs(activeMode, activeLogsPagination.page + 1)}
-            >
-              Вперёд
-            </button>
-          </div>
-        )}
+        <PaginationControl
+          pagination={activeLogsPagination}
+          loading={logsPageLoading}
+          onPageChange={(page) => void refreshLogs(activeMode, page)}
+        />
       </section>
 
       <footer className="site-footer">
@@ -1913,27 +1981,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 ))}
             </div>
 
-            <div className="pagination-row">
-              <button
-                className="outline-btn small-btn"
-                type="button"
-                disabled={billingHistoryLoading || !billingHistoryPagination.hasPreviousPage}
-                onClick={() => void refreshBillingHistory(billingHistoryPagination.page - 1)}
-              >
-                Назад
-              </button>
-              <span>
-                Страница {billingHistoryPagination.page} из {billingHistoryPagination.totalPages}
-              </span>
-              <button
-                className="outline-btn small-btn"
-                type="button"
-                disabled={billingHistoryLoading || !billingHistoryPagination.hasNextPage}
-                onClick={() => void refreshBillingHistory(billingHistoryPagination.page + 1)}
-              >
-                Вперёд
-              </button>
-            </div>
+            <PaginationControl
+              pagination={billingHistoryPagination}
+              loading={billingHistoryLoading}
+              onPageChange={(page) => void refreshBillingHistory(page)}
+            />
           </section>
         </div>
       )}

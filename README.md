@@ -18,6 +18,28 @@ Portfolio MVP for a SaaS-style AI secretary service:
 - redirects balance top-ups to CloudTips with amount and user id
 - connects Google Calendar through OAuth 2.0 and stores server-side tokens for future event automation
 
+## Voice Service
+
+The telephony voice service entrypoint is `server.js`.
+
+On the Asterisk test stand it is deployed as:
+
+```text
+/home/andrew/ai/server.js
+```
+
+Local checks:
+
+```bash
+npm run voice:check
+```
+
+Local start, when the required telephony/OpenAI environment variables are present:
+
+```bash
+npm run voice:start
+```
+
 ## Run with Docker
 
 ```bash

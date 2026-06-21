@@ -1,11 +1,16 @@
-import { timingSafeEqual } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 import { CallDirection, CallStatus, OutboundContactStatus, Prisma, ProfileStatus } from "@prisma/client";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
-import { maybeCreateCalendarEventFromCallLog } from "../lib/google-calendar.js";
+import {
+  calendarActionInputSchema,
+  maybeSyncCalendarFromCallLog,
+  syncCalendarAction,
+  type CalendarAutomationResult
+} from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
 import { normalizePhone } from "../lib/phone.js";
 import {
@@ -17,6 +22,7 @@ import { prisma } from "../lib/prisma.js";
 import { deliverTelegramTranscript } from "../lib/telegram.js";
 
 const voiceInternalRouter = Router();
+const REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH = 1024;
 
 const resolveCallSchema = z
   .object({
@@ -58,6 +64,15 @@ const telegramLinkSchema = z.object({
   chatId: z.union([z.string(), z.number()]).transform(String).pipe(z.string().trim().min(1).max(80)),
   username: z.string().trim().min(1).max(80).optional(),
   botUsername: z.string().trim().min(1).max(80).optional()
+});
+
+const calendarToolActionSchema = z.object({
+  assistantProfileId: z.string().trim().min(1),
+  callUuid: z.string().trim().max(100).optional(),
+  customerPhone: z.string().trim().min(1).max(64),
+  direction: z.enum(["INBOUND", "OUTBOUND"]).default("INBOUND"),
+  transcript: z.string().trim().max(30_000).optional(),
+  action: calendarActionInputSchema
 });
 
 function getHeaderValue(req: Request, name: string) {
@@ -128,6 +143,14 @@ function compactPromptText(value: string | null | undefined, maxLength: number) 
     .trim();
 }
 
+function clampTranscriptionPrompt(prompt: string) {
+  if (prompt.length <= REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH) {
+    return prompt;
+  }
+
+  return `${prompt.slice(0, REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH - 3).trimEnd()}...`;
+}
+
 function createProfileTranscriptionPrompt(profile: {
   mode: CallDirection;
   title: string;
@@ -138,7 +161,7 @@ function createProfileTranscriptionPrompt(profile: {
   const businessName = compactPromptText(profile.businessName, 160);
   const title = compactPromptText(profile.title, 160);
 
-  return [
+  const prompt = [
     "Русский телефонный разговор с AI-секретарём.",
     profile.mode === CallDirection.OUTBOUND
       ? "Тип звонка: исходящий звонок от AI-секретаря клиенту."
@@ -152,6 +175,8 @@ function createProfileTranscriptionPrompt(profile: {
   ]
     .filter(Boolean)
     .join("\n");
+
+  return clampTranscriptionPrompt(prompt);
 }
 
 function mapProfileToVoiceConfig(
@@ -162,9 +187,18 @@ function mapProfileToVoiceConfig(
         select: {
           id: true;
           phone: true;
+          timeZone: true;
           numberRentExpiresAt: true;
           rubleBalance: true;
           rubleBalanceKopecks: true;
+          googleAccount: {
+            select: {
+              status: true;
+              googleEmail: true;
+              calendarId: true;
+              connectedAt: true;
+            };
+          };
           telegramAccount: {
             select: {
               status: true;
@@ -228,8 +262,20 @@ function mapProfileToVoiceConfig(
     account: {
       id: profile.user.id,
       phone: profile.user.phone,
+      timeZone: profile.user.timeZone,
       rubleBalance: kopecksToRubles(profile.user.rubleBalanceKopecks),
       numberRentExpiresAt: profile.user.numberRentExpiresAt,
+      google:
+        profile.user.googleAccount?.status === "CONNECTED"
+          ? {
+              status: profile.user.googleAccount.status,
+              googleEmail: profile.user.googleAccount.googleEmail,
+              calendarId: profile.user.googleAccount.calendarId,
+              connectedAt: profile.user.googleAccount.connectedAt
+            }
+          : {
+              status: "DISCONNECTED" as const
+            },
       telegram:
         profile.user.telegramAccount?.status === "CONNECTED"
           ? {
@@ -300,16 +346,14 @@ function scheduleCalendarAutomation(input: {
   direction: CallDirection;
   transcript?: string | null;
   createdAt: Date;
+  assistantPrompt?: string | null;
 }) {
-  void maybeCreateCalendarEventFromCallLog(input)
+  void maybeSyncCalendarFromCallLog(input)
     .then((result) => {
-      if (result.status === "created" || result.status === "exists") {
-        console.log("Google Calendar event synced", {
-          callLogId: input.callLogId,
-          status: result.status,
-          eventId: result.eventId
-        });
-      }
+      console.log("Google Calendar automation result", {
+        callLogId: input.callLogId,
+        ...result
+      });
     })
     .catch((error: unknown) => {
       console.warn("Google Calendar automation failed", {
@@ -341,9 +385,18 @@ async function findInboundProfileByDid(did: string) {
         select: {
           id: true,
           phone: true,
+          timeZone: true,
           numberRentExpiresAt: true,
           rubleBalance: true,
           rubleBalanceKopecks: true,
+          googleAccount: {
+            select: {
+              status: true,
+              googleEmail: true,
+              calendarId: true,
+              connectedAt: true
+            }
+          },
           telegramAccount: {
             select: {
               status: true,
@@ -370,9 +423,18 @@ async function findActiveProfileById(assistantProfileId: string, direction?: Cal
         select: {
           id: true,
           phone: true,
+          timeZone: true,
           numberRentExpiresAt: true,
           rubleBalance: true,
           rubleBalanceKopecks: true,
+          googleAccount: {
+            select: {
+              status: true,
+              googleEmail: true,
+              calendarId: true,
+              connectedAt: true
+            }
+          },
           telegramAccount: {
             select: {
               status: true,
@@ -396,8 +458,102 @@ function buildDefaultSummary(status: CallStatus, customerPhone: string) {
   return `Call from ${customerPhone} was handled by the AI secretary.`;
 }
 
+function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult, action: z.infer<typeof calendarActionInputSchema>) {
+  const actionText =
+    action.action === "CREATE" ? "запись" : action.action === "CANCEL" ? "отмену записи" : "перенос записи";
+
+  if (result.status === "created" || result.status === "exists") {
+    return [
+      "Google Calendar подтвердил создание записи.",
+      "Коротко скажи клиенту, что запись сделана, повтори дату, время, услугу и имя, если они есть в разговоре.",
+      "Не говори, что передашь владельцу или что нужно ждать подтверждения."
+    ].join(" ");
+  }
+
+  if (result.status === "cancelled") {
+    return [
+      "Google Calendar подтвердил отмену записи.",
+      "Коротко скажи клиенту, что запись отменена.",
+      "Не говори, что передашь владельцу или что нужно ждать подтверждения."
+    ].join(" ");
+  }
+
+  if (result.status === "rescheduled") {
+    return [
+      "Google Calendar подтвердил перенос записи.",
+      "Коротко скажи клиенту, что запись перенесена, повтори новое время.",
+      "Не говори, что передашь владельцу или что нужно ждать подтверждения."
+    ].join(" ");
+  }
+
+  if (result.status === "conflict") {
+    return [
+      "Запрошенное время занято в Google Calendar.",
+      "Скажи клиенту, что это время занято, и попроси выбрать другое время.",
+      "Не создавай запись и не обещай подтверждение."
+    ].join(" ");
+  }
+
+  if (result.status === "not_found") {
+    return [
+      "Активная запись не найдена в Google Calendar.",
+      "Скажи клиенту, что не нашёл запись по указанным данным, и уточни дату, время или имя.",
+      "Не говори, что запись отменена или перенесена."
+    ].join(" ");
+  }
+
+  return [
+    `Не удалось выполнить ${actionText}.`,
+    "Коротко объясни, что календарь сейчас недоступен или данных недостаточно, и уточни недостающие детали.",
+    "Владельцу передавай только если клиент просит человека или ситуация вне сценария."
+  ].join(" ");
+}
+
 voiceInternalRouter.get("/healthz", requireVoiceService, (_req, res) => {
   res.json({ ok: true, service: "voice-internal" });
+});
+
+voiceInternalRouter.post("/calendar/action", requireVoiceService, async (req, res) => {
+  const parsed = calendarToolActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const payload = parsed.data;
+  const profile = await prisma.assistantProfile.findFirst({
+    where: {
+      id: payload.assistantProfileId,
+      status: ProfileStatus.ACTIVE
+    },
+    select: {
+      id: true,
+      userId: true
+    }
+  });
+
+  if (!profile) {
+    res.status(404).json({ message: "Assistant profile not found" });
+    return;
+  }
+
+  const customerPhone = normalizePhone(payload.customerPhone) || payload.customerPhone;
+  const callLogId = `voice-${payload.callUuid || randomUUID()}`;
+  const result = await syncCalendarAction({
+    userId: profile.userId,
+    callLogId,
+    customerPhone,
+    direction: payload.direction === "OUTBOUND" ? CallDirection.OUTBOUND : CallDirection.INBOUND,
+    action: payload.action,
+    transcript: payload.transcript,
+    createdAt: new Date()
+  });
+
+  res.json({
+    ok: true,
+    result,
+    assistantInstruction: buildCalendarToolAssistantInstruction(result, payload.action)
+  });
 });
 
 voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) => {
@@ -579,9 +735,18 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
           select: {
             id: true,
             phone: true,
+            timeZone: true,
             numberRentExpiresAt: true,
             rubleBalance: true,
             rubleBalanceKopecks: true,
+            googleAccount: {
+              select: {
+                status: true,
+                googleEmail: true,
+                calendarId: true,
+                connectedAt: true
+              }
+            },
             telegramAccount: {
               select: {
                 status: true,
@@ -672,7 +837,7 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
   const profile = payload.assistantProfileId
     ? await prisma.assistantProfile.findUnique({
         where: { id: payload.assistantProfileId },
-        select: { id: true, userId: true, mode: true }
+        select: { id: true, userId: true, mode: true, prompt: true }
       })
     : payload.did
       ? await findInboundProfileByDid(payload.did)
@@ -717,7 +882,8 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
         customerPhone,
         direction,
         transcript: payload.transcript,
-        createdAt: result.log.createdAt
+        createdAt: result.log.createdAt,
+        assistantPrompt: profile.prompt
       });
     }
 

@@ -1856,16 +1856,72 @@ label {
 .pagination-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.6rem;
+  justify-content: center;
+  gap: 0.4rem;
   margin-top: 0.75rem;
 }
 
-.pagination-row span {
+.pagination-row span,
+.pagination-page,
+.pagination-arrow {
   color: var(--muted);
   font-size: 0.88rem;
   font-weight: 700;
   text-align: center;
+}
+
+.pagination-pages {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.pagination-page,
+.pagination-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  min-height: 2rem;
+  border: 1px solid #d8e2dc;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.pagination-arrow {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.pagination-page:hover:not(:disabled),
+.pagination-arrow:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand-strong);
+  transform: translateY(-1px);
+}
+
+.pagination-page.active {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #ffffff;
+}
+
+.pagination-page:disabled,
+.pagination-arrow:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.pagination-ellipsis {
+  min-width: 1.2rem;
+  color: var(--muted);
 }
 
 .contact-row,
@@ -2774,8 +2830,8 @@ label {
   }
 
   .pagination-row {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-wrap: wrap;
   }
 
   .rate-row,

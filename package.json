@@ -11,6 +11,8 @@
     "dev": "concurrently \"npm run dev --workspace @ai-secretary/api\" \"npm run dev --workspace @ai-secretary/web\"",
     "build": "npm run build --workspace @ai-secretary/api && npm run build --workspace @ai-secretary/web",
     "start": "npm run start --workspace @ai-secretary/api",
+    "voice:check": "node --check server.js",
+    "voice:start": "node server.js",
     "lint": "npm run lint --workspace @ai-secretary/api && npm run lint --workspace @ai-secretary/web",
     "db:migrate": "npm run db:migrate --workspace @ai-secretary/api",
     "db:reset": "npm run db:reset --workspace @ai-secretary/api",
