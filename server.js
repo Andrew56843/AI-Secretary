@@ -55,7 +55,7 @@ const CONFIG = {
   clientsConfigPath: process.env.CLIENTS_CONFIG_PATH || path.join(process.cwd(), 'clients.json'),
 
   keepMetadataMs: Number(process.env.KEEP_METADATA_MS || 30 * 60 * 1000),
-  maxResponseOutputTokens: Number(process.env.MAX_RESPONSE_OUTPUT_TOKENS || 320),
+  maxResponseOutputTokens: Number(process.env.MAX_RESPONSE_OUTPUT_TOKENS || 600),
 
   inputSampleRate: 8000,
   modelSampleRate: 24000,
