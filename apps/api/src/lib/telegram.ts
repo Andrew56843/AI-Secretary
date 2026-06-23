@@ -26,9 +26,52 @@ function buildTelegramTarget(account: TelegramTargetInput | null | undefined) {
   return null;
 }
 
-function buildTranscriptMessage(input: { transcript?: string | null }) {
-  const transcript = String(input.transcript ?? "").trim();
-  return ["call end", transcript].filter(Boolean).join("\n\n");
+function normalizePhoneForTelegram(value: string | null | undefined) {
+  const raw = String(value ?? "").trim();
+  const digits = raw.replace(/\D/g, "");
+
+  if (!digits) {
+    return raw || "unknown";
+  }
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `+7${digits.slice(1)}`;
+  }
+  if (digits.length === 10 && digits.startsWith("9")) {
+    return `+7${digits}`;
+  }
+  if (raw.startsWith("+")) {
+    return `+${digits}`;
+  }
+
+  return `+${digits}`;
+}
+
+function buildTranscriptHeader(input: { direction?: string | null; customerPhone?: string | null }) {
+  const direction = String(input.direction ?? "").toUpperCase() === "OUTBOUND" ? "out" : "in";
+  return `call ${direction} ${normalizePhoneForTelegram(input.customerPhone)} end`;
+}
+
+function stripLegacyTranscriptHeaders(value: string) {
+  let transcript = value.trim();
+
+  while (true) {
+    const next = transcript
+      .replace(/^call\s+(?:in|out)\s+\+?[0-9][0-9\s().-]*\s+end\s*/i, "")
+      .replace(/^call\s+end\s*/i, "")
+      .trimStart();
+
+    if (next === transcript) {
+      return transcript.trim();
+    }
+
+    transcript = next;
+  }
+}
+
+function buildTranscriptMessage(input: { direction?: string | null; customerPhone?: string | null; transcript?: string | null }) {
+  const header = buildTranscriptHeader(input);
+  const transcript = stripLegacyTranscriptHeaders(String(input.transcript ?? ""));
+  return [header, transcript].filter(Boolean).join("\n\n");
 }
 
 async function postTelegramJson(method: string, body: Record<string, unknown>) {
@@ -55,7 +98,8 @@ async function postTelegramDocument(chatId: string, message: string, fileName: s
 
   const form = new FormData();
   form.append("chat_id", chatId);
-  form.append("caption", "call end\nТранскрипт во вложении.".slice(0, MAX_CAPTION_LENGTH));
+  const captionHeader = message.split(/\r?\n/, 1)[0] || "call end";
+  form.append("caption", `${captionHeader}\nТранскрипт во вложении.`.slice(0, MAX_CAPTION_LENGTH));
   form.append("document", new Blob([message], { type: "text/plain;charset=utf-8" }), fileName);
 
   const response = await fetch(`${TELEGRAM_API_URL}/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, {

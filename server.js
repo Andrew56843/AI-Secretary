@@ -1915,6 +1915,35 @@ const audioServer = net.createServer((socket) => {
     );
   }
 
+  function normalizePhoneForCallHeader(value) {
+    const raw = String(value || '').trim();
+    const digits = raw.replace(/\D/g, '');
+
+    if (!digits) {
+      return raw || 'unknown';
+    }
+    if (digits.length === 11 && digits.startsWith('8')) {
+      return `+7${digits.slice(1)}`;
+    }
+    if (digits.length === 10 && digits.startsWith('9')) {
+      return `+7${digits}`;
+    }
+    if (raw.startsWith('+')) {
+      return `+${digits}`;
+    }
+
+    return `+${digits}`;
+  }
+
+  function getCallTranscriptHeader() {
+    const direction = String(clientCfg.direction || meta?.direction || summary.direction || 'INBOUND').toUpperCase() === 'OUTBOUND'
+        ? 'out'
+        : 'in';
+    const phone = normalizePhoneForCallHeader(summary.callerId || meta?.callerId || clientCfg?.outboundContact?.phone || 'unknown');
+
+    return `call ${direction} ${phone} end`;
+  }
+
   async function persistPlatformCallLog(transcriptText, status) {
     const assistantProfileId = clientCfg.assistantProfileId || summary.platform.assistantProfileId || null;
     const direction = String(clientCfg.direction || meta?.direction || summary.direction || 'INBOUND').toUpperCase() === 'OUTBOUND'
@@ -1977,7 +2006,8 @@ const audioServer = net.createServer((socket) => {
 
   function sendFinalCallLog(rawLog) {
     const realtimeLog = String(rawLog || '').trim();
-    const fallbackText = `call end\n${realtimeLog}`.trimEnd();
+    const callHeader = getCallTranscriptHeader();
+    const fallbackText = `${callHeader}\n${realtimeLog}`.trimEnd();
     const rawStats = getRawTranscriptStats(realtimeLog);
 
     if (realtimeTranscriptTextPath) {
@@ -2005,7 +2035,7 @@ const audioServer = net.createServer((socket) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');
 
-      const telegramText = `call end\n${clean}`;
+      const telegramText = `${callHeader}\n${clean}`;
       if (processedTranscriptPath) {
         fs.writeFileSync(processedTranscriptPath, telegramText + '\n', 'utf8');
       }
