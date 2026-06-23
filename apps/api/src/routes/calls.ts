@@ -20,16 +20,39 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
 
   const direction = parsed.data.direction === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND;
 
-  const profile = await prisma.assistantProfile.findUnique({
-    where: { userId_mode: { userId: req.user!.userId, mode: direction } },
-    select: { id: true, status: true }
-  });
+  const [profile, inboundProfile] = await Promise.all([
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: req.user!.userId, mode: direction } },
+      select: { id: true, status: true }
+    }),
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: req.user!.userId, mode: CallDirection.INBOUND } },
+      select: {
+        reservedNumberId: true,
+        user: {
+          select: {
+            numberRentExpiresAt: true
+          }
+        }
+      }
+    })
+  ]);
 
   if (!profile || profile.status !== ProfileStatus.ACTIVE) {
     res.status(404).json({
       message:
         direction === CallDirection.OUTBOUND ? "Create outbound assistant profile first" : "Create inbound assistant profile first"
     });
+    return;
+  }
+
+  if (!inboundProfile?.reservedNumberId) {
+    res.status(409).json({ message: "Reserve a phone number before starting test calls" });
+    return;
+  }
+
+  if (inboundProfile.user.numberRentExpiresAt && inboundProfile.user.numberRentExpiresAt < new Date()) {
+    res.status(402).json({ message: "Reserved phone number rent has expired" });
     return;
   }
 

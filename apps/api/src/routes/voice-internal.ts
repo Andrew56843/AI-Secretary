@@ -642,7 +642,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     ok: true,
     call: {
       uuid: parsed.data.uuid ?? null,
-      did: parsed.data.did ?? profile.reservedNumber?.number ?? null,
+      did: parsed.data.did ?? profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null,
       callerId: parsed.data.callerId ?? null
     },
     profile: mapProfileToVoiceConfig(profile, {
@@ -676,7 +676,15 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
           queuedForCall: false,
           OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
           user: {
-            rubleBalanceKopecks: { gt: 0 }
+            rubleBalanceKopecks: { gt: 0 },
+            numberRentExpiresAt: { gt: now },
+            profiles: {
+              some: {
+                mode: CallDirection.INBOUND,
+                status: ProfileStatus.ACTIVE,
+                reservedNumberId: { not: null }
+              }
+            }
           },
           AND: [
             {

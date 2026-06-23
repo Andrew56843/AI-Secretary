@@ -1122,6 +1122,10 @@ function getQueuedCallDirection(profile) {
   return String(profile?.direction || 'OUTBOUND').toUpperCase() === 'INBOUND' ? 'INBOUND' : 'OUTBOUND';
 }
 
+function getOutboundCallerId(profile) {
+  return normalizeDialPhone(profile?.reservedNumber?.number || profile?.outboundCallerId || CONFIG.outboundCallerId || '');
+}
+
 async function requestPlatformOutboundJob() {
   if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) return null;
   const response = await platformPostJson(
@@ -1147,7 +1151,7 @@ async function releasePlatformOutboundJob(outboundContactId, reason) {
 
 function buildOutboundCallFile({ uuid, phone, profile, job }) {
   const direction = getQueuedCallDirection(profile);
-  const callerId = normalizeDialPhone(CONFIG.outboundCallerId || profile.outboundCallerId || profile.reservedNumber?.number || '');
+  const callerId = getOutboundCallerId(profile);
   const did = callerId || 'outbound';
   const channel = `${CONFIG.outboundTrunk}:${phone}@sip.novofon.ru`;
   const callerIdLine = callerId
@@ -1245,7 +1249,7 @@ async function outboundDialerTick() {
 
       const uuid = crypto.randomUUID();
       const normalizedUuid = normalizeUuid(uuid);
-      const did = normalizeDialPhone(CONFIG.outboundCallerId || profile.outboundCallerId || profile.reservedNumber?.number || '') || 'outbound';
+      const did = getOutboundCallerId(profile) || 'outbound';
       const direction = getQueuedCallDirection(profile);
       const meta = {
         uuid,
