@@ -1123,7 +1123,7 @@ function getQueuedCallDirection(profile) {
 }
 
 function getOutboundCallerId(profile) {
-  return normalizeDialPhone(profile?.reservedNumber?.number || profile?.outboundCallerId || CONFIG.outboundCallerId || '');
+  return normalizeDialPhone(profile?.outboundCallerId || profile?.reservedNumber?.number || CONFIG.outboundCallerId || '');
 }
 
 async function requestPlatformOutboundJob() {

@@ -642,7 +642,11 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     ok: true,
     call: {
       uuid: parsed.data.uuid ?? null,
-      did: parsed.data.did ?? profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null,
+      did:
+        parsed.data.did ??
+        (direction === CallDirection.OUTBOUND
+          ? inboundProfile?.reservedNumber?.number ?? profile.reservedNumber?.number ?? null
+          : profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null),
       callerId: parsed.data.callerId ?? null
     },
     profile: mapProfileToVoiceConfig(profile, {
@@ -676,15 +680,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
           queuedForCall: false,
           OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
           user: {
-            rubleBalanceKopecks: { gt: 0 },
-            numberRentExpiresAt: { gt: now },
-            profiles: {
-              some: {
-                mode: CallDirection.INBOUND,
-                status: ProfileStatus.ACTIVE,
-                reservedNumberId: { not: null }
-              }
-            }
+            rubleBalanceKopecks: { gt: 0 }
           },
           AND: [
             {
@@ -701,11 +697,41 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
             }
           ]
         },
+        include: {
+          user: {
+            select: {
+              phone: true,
+              numberRentExpiresAt: true,
+              profiles: {
+                where: {
+                  mode: CallDirection.INBOUND,
+                  status: ProfileStatus.ACTIVE
+                },
+                select: {
+                  reservedNumberId: true
+                }
+              }
+            }
+          }
+        },
         orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
         take: 10
       });
 
       for (const candidate of candidates) {
+        const candidatePhone = normalizePhone(candidate.phone);
+        const ownerPhone = normalizePhone(candidate.user.phone);
+        const isTestCall = Boolean(candidatePhone && ownerPhone && candidatePhone === ownerPhone);
+        const hasActiveReservedNumber = Boolean(
+          candidate.user.numberRentExpiresAt &&
+            candidate.user.numberRentExpiresAt > now &&
+            candidate.user.profiles.some((profile) => profile.reservedNumberId)
+        );
+
+        if (!isTestCall && !hasActiveReservedNumber) {
+          continue;
+        }
+
         const result = await tx.outboundContact.updateMany({
           where: {
             id: candidate.id,
@@ -795,7 +821,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     },
     profile: mapProfileToVoiceConfig(profile, {
       direction: callMode,
-      outboundCallerId: profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null,
+      outboundCallerId: inboundProfile?.reservedNumber?.number ?? profile.reservedNumber?.number ?? null,
       outboundContact: {
         id: claimed.id,
         phone: claimed.phone,
