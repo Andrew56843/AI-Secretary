@@ -1675,37 +1675,106 @@ function buildSessionUpdate(clientCfg, callMeta) {
   };
 }
 
-function shouldForwardAssistantText(text) {
+function normalizeIntentText(text) {
   const normalized = String(text || '')
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
+  return normalized;
+}
+
+const FORWARD_HUMAN_TARGETS = [
+  'оператор',
+  'оператора',
+  'сотрудник',
+  'сотрудника',
+  'менеджер',
+  'менеджера',
+  'владелец',
+  'владельца',
+  'создател',
+  'человек',
+  'человека',
+  'живой',
+  'живым',
+  'специалист',
+  'специалиста',
+  'коллег',
+];
+
+function hasForwardHumanTarget(normalized) {
+  return FORWARD_HUMAN_TARGETS.some((phrase) => normalized.includes(phrase));
+}
+
+function shouldForwardUserText(text) {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return false;
+
+  const hasHumanTarget = hasForwardHumanTarget(normalized);
+  if (!hasHumanTarget) return false;
+
+  const negatesHumanRequest = [
+    'не хочу говорить с',
+    'не хочу поговорить с',
+    'не хочу разговаривать с',
+    'не нужен',
+    'не нужна',
+    'не надо',
+    'не перевод',
+    'не переключ',
+    'не соедин',
+  ].some((phrase) => normalized.includes(phrase));
+  if (negatesHumanRequest) return false;
+
+  return [
+    'хочу говорить',
+    'хочу поговорить',
+    'буду говорить',
+    'говорить с',
+    'разговаривать с',
+    'дай',
+    'дайте',
+    'позови',
+    'позовите',
+    'приведи',
+    'приведите',
+    'соедини',
+    'соедините',
+    'переведи',
+    'переведите',
+    'переключи',
+    'переключите',
+    'переадресуй',
+    'переадресуйте',
+    'передай',
+    'передайте',
+    'нужен',
+    'нужна',
+  ].some((phrase) => normalized.includes(phrase));
+}
+
+function shouldForwardAssistantText(text) {
+  const normalized = normalizeIntentText(text);
+
   if (!normalized) return false;
 
   const hasForwardAction = [
-    'переадресую',
-    'перевожу',
-    'переведу',
-    'соединяю',
-    'соединю',
-    'переключаю',
-    'переключу',
+    'переадрес',
+    'перевож',
+    'перевед',
+    'перевод',
+    'соедин',
+    'переключ',
     'передаю',
     'передам',
+    'передач',
+    'запрос на',
+    'заявка на',
+    'обращение к',
   ].some((phrase) => normalized.includes(phrase));
-  const hasHumanTarget = [
-    'оператор',
-    'сотрудник',
-    'менеджер',
-    'владелец',
-    'владельц',
-    'создател',
-    'человек',
-    'специалист',
-    'коллег',
-  ].some((phrase) => normalized.includes(phrase));
+  const hasHumanTarget = hasForwardHumanTarget(normalized);
 
   return hasForwardAction && hasHumanTarget;
 }
@@ -2563,6 +2632,14 @@ const audioServer = net.createServer((socket) => {
               itemId: evt.item_id || null,
               contentIndex: evt.content_index ?? null,
             });
+            if (shouldForwardUserText(transcript)) {
+              log('[FWD]', `user requested human: ${transcript}`);
+              clearOutboundAudio('user_forward_request');
+              if (responseActive) {
+                cancelActiveResponse('user_forward_request');
+              }
+              redirectCallToMobile('user_forward_request');
+            }
           }
           break;
         }
