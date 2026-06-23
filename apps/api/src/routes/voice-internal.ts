@@ -23,6 +23,7 @@ import { deliverTelegramTranscript } from "../lib/telegram.js";
 
 const voiceInternalRouter = Router();
 const REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH = 1024;
+const STALE_OUTBOUND_QUEUE_MS = 10 * 60 * 1000;
 
 const resolveCallSchema = z
   .object({
@@ -312,6 +313,25 @@ async function releaseOutboundContactForRetry(
   });
 
   return { removed: false, attempts };
+}
+
+async function releaseStaleQueuedOutboundContacts(tx: Prisma.TransactionClient, now: Date) {
+  const staleBefore = new Date(now.getTime() - STALE_OUTBOUND_QUEUE_MS);
+  const staleContacts = await tx.outboundContact.findMany({
+    where: {
+      status: OutboundContactStatus.PENDING,
+      queuedForCall: true,
+      updatedAt: { lt: staleBefore }
+    },
+    select: { id: true, attempts: true },
+    take: 20
+  });
+
+  for (const contact of staleContacts) {
+    await releaseOutboundContactForRetry(tx, contact);
+  }
+
+  return staleContacts.length;
 }
 
 async function finishOutboundContact(
@@ -674,6 +694,8 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
   const now = new Date();
   const claimed = await prisma.$transaction(
     async (tx) => {
+      await releaseStaleQueuedOutboundContacts(tx, now);
+
       const candidates = await tx.outboundContact.findMany({
         where: {
           status: OutboundContactStatus.PENDING,

@@ -1199,7 +1199,20 @@ async function scanOutboundDoneFiles() {
     if (!fs.existsSync(donePath)) {
       if (Date.now() - item.createdAt > Math.max(120000, (CONFIG.outboundWaitTimeSec + 90) * 1000)) {
         outboundInFlight.delete(uuid);
-        await releasePlatformOutboundJob(item.job.id, 'outbound call file timed out');
+        const direction = getQueuedCallDirection(item.profile);
+        log('[OUTBOUND]', `timeout uuid=${uuid} contact=${item.job.id}; releasing queued call`);
+        const logged = await sendPlatformCallLog({
+          assistantProfileId: item.profile.assistantProfileId,
+          outboundContactId: item.job.id,
+          direction,
+          customerPhone: item.job.phone,
+          status: 'MISSED',
+          durationSeconds: 0,
+          summary: `${direction === 'INBOUND' ? 'Inbound test call' : 'Outbound call'} did not reach AI before timeout. Asterisk archive file was not found.`,
+        });
+        if (!logged) {
+          await releasePlatformOutboundJob(item.job.id, 'outbound call file timed out');
+        }
       }
       continue;
     }
@@ -1628,6 +1641,41 @@ function buildSessionUpdate(clientCfg, callMeta) {
     type: 'session.update',
     session,
   };
+}
+
+function shouldForwardAssistantText(text) {
+  const normalized = String(text || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  if (!normalized) return false;
+
+  const hasForwardAction = [
+    'переадресую',
+    'перевожу',
+    'переведу',
+    'соединяю',
+    'соединю',
+    'переключаю',
+    'переключу',
+    'передаю',
+    'передам',
+  ].some((phrase) => normalized.includes(phrase));
+  const hasHumanTarget = [
+    'оператор',
+    'сотрудник',
+    'менеджер',
+    'владелец',
+    'владельц',
+    'создател',
+    'человек',
+    'специалист',
+    'коллег',
+  ].some((phrase) => normalized.includes(phrase));
+
+  return hasForwardAction && hasHumanTarget;
 }
 
 function buildGreetingResponse(clientCfg) {
@@ -2545,18 +2593,7 @@ const audioServer = net.createServer((socket) => {
               responseId: evt.response_id || currentResponseId || null,
               itemId: evt.item_id || null,
             });
-            const normalized = text
-                .toLowerCase()
-                .replace(/[^\p{L}\p{N}\s]/gu, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-            const hasForward =
-                normalized.includes('перевожу') &&
-                normalized.includes('вас') &&
-                normalized.includes('создателя');
-
-            if (hasForward) {
+            if (shouldForwardAssistantText(text)) {
               log('[FWD]', 'redirecting call');
               clearOutboundAudio('forward_to_mobile');
               redirectCallToMobile('assistant_forward');
