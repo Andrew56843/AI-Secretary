@@ -28,6 +28,23 @@ function getNextAttemptAt() {
   return new Date(Date.now() + OUTBOUND_RETRY_INTERVAL_MINUTES * 60 * 1000);
 }
 
+async function hasActiveReservedNumber(userId: string) {
+  const now = new Date();
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      numberRentExpiresAt: true,
+      profiles: {
+        where: { reservedNumberId: { not: null } },
+        select: { id: true },
+        take: 1
+      }
+    }
+  });
+
+  return Boolean(user?.numberRentExpiresAt && user.numberRentExpiresAt > now && user.profiles.length > 0);
+}
+
 async function finishOutboundAttempt(
   tx: Prisma.TransactionClient,
   contact: { id: string; attempts: number },
@@ -110,6 +127,11 @@ outboundRouter.post("/contacts/import", requireAuth, async (req, res) => {
   const parsed = importContactsSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  if (!(await hasActiveReservedNumber(req.user!.userId))) {
+    res.status(409).json({ message: "Сначала зарезервируйте номер аккаунта для входящих и исходящих звонков" });
     return;
   }
 

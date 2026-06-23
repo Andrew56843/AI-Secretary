@@ -688,6 +688,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [forwardingGuideOpen, setForwardingGuideOpen] = useState(false);
+  const [numberRequiredModalOpen, setNumberRequiredModalOpen] = useState(false);
   const [contactNameModal, setContactNameModal] = useState<{ phone: string } | null>(null);
   const [contactNameDraft, setContactNameDraft] = useState("");
   const [templatePickerDismissed, setTemplatePickerDismissed] = useState<Record<UiMode, boolean>>({
@@ -1300,6 +1301,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     event.preventDefault();
     setError(null);
     setNotice(null);
+
+    if (!reservedNumber) {
+      setNumberRequiredModalOpen(true);
+      return;
+    }
 
     try {
       const result = await importOutboundContacts(token, rawNumbers);
@@ -2146,6 +2152,37 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 <button type="submit">Обновить код</button>
               </div>
             </form>
+          </section>
+        </div>
+      )}
+
+      {numberRequiredModalOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setNumberRequiredModalOpen(false)}>
+          <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="number-required-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="panel-title">
+              <h2 id="number-required-title">Сначала зарезервируйте номер</h2>
+              <button className="icon-mini-btn" type="button" aria-label="Закрыть" onClick={() => setNumberRequiredModalOpen(false)}>
+                ×
+              </button>
+            </div>
+            <p className="hint">
+              Один номер аккаунта используется и для входящих, и для исходящих звонков. Чтобы загрузить базу обзвона,
+              сначала зарезервируйте номер.
+            </p>
+            <div className="modal-actions">
+              <button className="outline-btn" type="button" onClick={() => setNumberRequiredModalOpen(false)}>
+                Понятно
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNumberRequiredModalOpen(false);
+                  setTopUpModalOpen(true);
+                }}
+              >
+                Зарезервировать номер
+              </button>
+            </div>
           </section>
         </div>
       )}
