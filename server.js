@@ -12,6 +12,8 @@ const WebSocket = require('ws');
 
 const { SocksProxyAgent } = require('socks-proxy-agent');
 
+const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
+
 const CONFIG = {
   audioSocketHost: process.env.AUDIOSOCKET_HOST || '127.0.0.1',
   audioSocketPort: Number(process.env.AUDIOSOCKET_PORT || 9019),
@@ -35,7 +37,10 @@ const CONFIG = {
   outboundContext: process.env.OUTBOUND_CONTEXT || 'ai-outbound',
   outboundExtension: process.env.OUTBOUND_EXTENSION || 's',
   outboundCallerId: process.env.OUTBOUND_CALLER_ID || '',
-  asteriskOutgoingDir: process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing',
+  asteriskOutgoingDir: DEFAULT_ASTERISK_OUTGOING_DIR,
+  asteriskOutgoingStagingDir:
+      process.env.ASTERISK_OUTGOING_STAGING_DIR ||
+      path.join(path.dirname(DEFAULT_ASTERISK_OUTGOING_DIR), 'callsec-outgoing-staging'),
   asteriskOutgoingDoneDir: process.env.ASTERISK_OUTGOING_DONE_DIR || '/var/spool/asterisk/outgoing_done',
 
   openAiApiKey: process.env.OPENAI_API_KEY || '',
@@ -1149,6 +1154,18 @@ async function releasePlatformOutboundJob(outboundContactId, reason) {
   });
 }
 
+async function releasePlatformOutboundJobWithoutAttempt(outboundContactId, reason) {
+  if (!outboundContactId || !CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) return null;
+  return platformPostJson(
+      '/internal/voice/outbound/release',
+      { outboundContactId, reason, countAttempt: false },
+      Math.max(CONFIG.platformApiTimeoutMs, 5000)
+  ).catch((err) => {
+    logErr('[OUTBOUND]', `release failed: ${String(err?.message || err)}`);
+    return null;
+  });
+}
+
 function buildOutboundCallFile({ uuid, phone, profile, job }) {
   const direction = getQueuedCallDirection(profile);
   const callerId = getOutboundCallerId(profile);
@@ -1181,11 +1198,23 @@ function buildOutboundCallFile({ uuid, phone, profile, job }) {
 
 async function installOutboundCallFile(fileName, content) {
   const tmpPath = path.join('/tmp', fileName);
+  const stagingFileName = `.${fileName}.${process.pid}.${Date.now()}.tmp`;
+  const stagingPath = path.join(CONFIG.asteriskOutgoingStagingDir, stagingFileName);
   const destPath = path.join(CONFIG.asteriskOutgoingDir, fileName);
   fs.writeFileSync(tmpPath, content, 'utf8');
-  await execCommand(`sudo /usr/bin/install -o asterisk -g asterisk -m 0640 ${shellQuote(tmpPath)} ${shellQuote(destPath)}`);
-  fs.unlink(tmpPath, () => {});
-  return destPath;
+  try {
+    await execCommand(
+        `sudo /usr/bin/install -d -o asterisk -g asterisk -m 0750 ${shellQuote(CONFIG.asteriskOutgoingDir)} ${shellQuote(CONFIG.asteriskOutgoingStagingDir)}`
+    );
+    await execCommand(`sudo /usr/bin/install -o asterisk -g asterisk -m 0640 ${shellQuote(tmpPath)} ${shellQuote(stagingPath)}`);
+    await execCommand(`sudo /bin/mv -f ${shellQuote(stagingPath)} ${shellQuote(destPath)}`);
+    return destPath;
+  } catch (err) {
+    await execCommand(`sudo /bin/rm -f ${shellQuote(stagingPath)}`, 5000).catch(() => null);
+    throw err;
+  } finally {
+    fs.unlink(tmpPath, () => {});
+  }
 }
 
 function parseArchivedCallStatus(text) {
@@ -1193,33 +1222,36 @@ function parseArchivedCallStatus(text) {
   return match ? match[1].trim() : '';
 }
 
+async function sudoFileExists(filePath) {
+  try {
+    await execCommand(`sudo /usr/bin/test -f ${shellQuote(filePath)}`, 5000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sudoReadTextFile(filePath) {
+  const { stdout } = await execCommand(`sudo /bin/cat ${shellQuote(filePath)}`, 5000);
+  return stdout || '';
+}
+
 async function scanOutboundDoneFiles() {
   for (const [uuid, item] of [...outboundInFlight.entries()]) {
     const donePath = path.join(CONFIG.asteriskOutgoingDoneDir, item.fileName);
-    if (!fs.existsSync(donePath)) {
+    const doneExists = await sudoFileExists(donePath);
+    if (!doneExists) {
       if (Date.now() - item.createdAt > Math.max(120000, (CONFIG.outboundWaitTimeSec + 90) * 1000)) {
         outboundInFlight.delete(uuid);
-        const direction = getQueuedCallDirection(item.profile);
-        log('[OUTBOUND]', `timeout uuid=${uuid} contact=${item.job.id}; releasing queued call`);
-        const logged = await sendPlatformCallLog({
-          assistantProfileId: item.profile.assistantProfileId,
-          outboundContactId: item.job.id,
-          direction,
-          customerPhone: item.job.phone,
-          status: 'MISSED',
-          durationSeconds: 0,
-          summary: `${direction === 'INBOUND' ? 'Inbound test call' : 'Outbound call'} did not reach AI before timeout. Asterisk archive file was not found.`,
-        });
-        if (!logged) {
-          await releasePlatformOutboundJob(item.job.id, 'outbound call file timed out');
-        }
+        log('[OUTBOUND]', `timeout uuid=${uuid} contact=${item.job.id}; releasing queued call without counting attempt`);
+        await releasePlatformOutboundJobWithoutAttempt(item.job.id, 'outbound call file timed out');
       }
       continue;
     }
 
     let status = '';
     try {
-      status = parseArchivedCallStatus(fs.readFileSync(donePath, 'utf8'));
+      status = parseArchivedCallStatus(await sudoReadTextFile(donePath));
     } catch (err) {
       logErr('[OUTBOUND]', `failed to read archived call file ${donePath}: ${err.message}`);
     }
@@ -1293,7 +1325,7 @@ async function outboundDialerTick() {
       } catch (err) {
         callRegistry.delete(normalizedUuid);
         logErr('[OUTBOUND]', `failed to install call file for ${phone}: ${String(err?.message || err)}`);
-        await releasePlatformOutboundJob(job.id, 'failed to create Asterisk call file');
+        await releasePlatformOutboundJobWithoutAttempt(job.id, 'failed to create Asterisk call file');
       }
     }
   } catch (err) {

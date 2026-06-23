@@ -57,7 +57,8 @@ const outboundNextSchema = z.object({
 
 const outboundReleaseSchema = z.object({
   outboundContactId: z.string().trim().min(1),
-  reason: z.string().trim().max(400).optional()
+  reason: z.string().trim().max(400).optional(),
+  countAttempt: z.boolean().default(true).optional()
 });
 
 const telegramLinkSchema = z.object({
@@ -315,6 +316,28 @@ async function releaseOutboundContactForRetry(
   return { removed: false, attempts };
 }
 
+async function releaseOutboundContactWithoutAttempt(tx: Prisma.TransactionClient, contactId: string) {
+  const contact = await tx.outboundContact.findUnique({
+    where: { id: contactId },
+    select: { id: true, attempts: true }
+  });
+
+  if (!contact) {
+    return null;
+  }
+
+  await tx.outboundContact.update({
+    where: { id: contact.id },
+    data: {
+      queuedForCall: false,
+      status: OutboundContactStatus.PENDING,
+      nextAttemptAt: null
+    }
+  });
+
+  return { removed: false, attempts: contact.attempts };
+}
+
 async function releaseStaleQueuedOutboundContacts(tx: Prisma.TransactionClient, now: Date) {
   const staleBefore = new Date(now.getTime() - STALE_OUTBOUND_QUEUE_MS);
   const staleContacts = await tx.outboundContact.findMany({
@@ -328,7 +351,7 @@ async function releaseStaleQueuedOutboundContacts(tx: Prisma.TransactionClient, 
   });
 
   for (const contact of staleContacts) {
-    await releaseOutboundContactForRetry(tx, contact);
+    await releaseOutboundContactWithoutAttempt(tx, contact.id);
   }
 
   return staleContacts.length;
@@ -870,6 +893,10 @@ voiceInternalRouter.post("/outbound/release", requireVoiceService, async (req, r
 
       if (!contact) {
         return null;
+      }
+
+      if (parsed.data.countAttempt === false) {
+        return releaseOutboundContactWithoutAttempt(tx, contact.id);
       }
 
       return releaseOutboundContactForRetry(tx, contact);
