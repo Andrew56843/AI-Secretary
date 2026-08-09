@@ -306,6 +306,8 @@ async function releaseOutboundContactForRetry(
     where: { id: contact.id },
     data: {
       queuedForCall: false,
+      activeCallUuid: null,
+      activeCallStartedAt: null,
       status: OutboundContactStatus.PENDING,
       attempts,
       nextAttemptAt: new Date(Date.now() + 15 * 60 * 1000),
@@ -330,6 +332,8 @@ async function releaseOutboundContactWithoutAttempt(tx: Prisma.TransactionClient
     where: { id: contact.id },
     data: {
       queuedForCall: false,
+      activeCallUuid: null,
+      activeCallStartedAt: null,
       status: OutboundContactStatus.PENDING,
       nextAttemptAt: null
     }
@@ -681,6 +685,20 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
       })
     : null;
 
+  if (direction === CallDirection.OUTBOUND && outboundContact) {
+    await prisma.outboundContact.updateMany({
+      where: {
+        id: outboundContact.id,
+        userId: profile.userId,
+        queuedForCall: true
+      },
+      data: {
+        activeCallUuid: parsed.data.uuid ?? null,
+        activeCallStartedAt: now
+      }
+    });
+  }
+
   res.json({
     ok: true,
     call: {
@@ -784,7 +802,9 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
             queuedForCall: false
           },
           data: {
-            queuedForCall: true
+            queuedForCall: true,
+            activeCallUuid: null,
+            activeCallStartedAt: null
           }
         });
 

@@ -1792,12 +1792,18 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 {contacts.length === 0 && <p className="empty-state">Номера пока не загружены.</p>}
 
                 {contacts.map((contact) => (
-                  <article className="contact-row" key={contact.id}>
+                  <article className={`contact-row${contact.activeCallStartedAt ? " contact-row-live" : ""}`} key={contact.id}>
                     <div>
                       <strong>{contactNames[contact.phone] ? `${contactNames[contact.phone]} · ${contact.phone}` : contact.phone}</strong>
-                      <span>
-                        {contact.attempts === 0 ? "Ожидает первого звонка" : `${contact.attempts} попыток`}
-                        {contact.nextAttemptAt
+                      <span className={contact.activeCallStartedAt ? "outbound-call-live" : undefined} aria-live="polite">
+                        {contact.activeCallStartedAt
+                          ? "Идёт разговор"
+                          : contact.queuedForCall
+                            ? "Набираем номер..."
+                            : contact.attempts === 0
+                              ? "Ожидает первого звонка"
+                              : `${contact.attempts} попыток`}
+                        {!contact.activeCallStartedAt && contact.nextAttemptAt
                           ? ` · повтор после ${new Date(contact.nextAttemptAt).toLocaleTimeString("ru-RU", {
                               hour: "2-digit",
                               minute: "2-digit"
@@ -1805,7 +1811,13 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                           : ""}
                       </span>
                     </div>
-                    <button className="outline-btn small-btn" type="button" onClick={() => void handleDeleteOutboundContact(contact)}>
+                    <button
+                      className="outline-btn small-btn"
+                      type="button"
+                      onClick={() => void handleDeleteOutboundContact(contact)}
+                      disabled={Boolean(contact.activeCallStartedAt)}
+                      title={contact.activeCallStartedAt ? "Дождитесь завершения разговора" : undefined}
+                    >
                       Удалить из базы
                     </button>
                   </article>

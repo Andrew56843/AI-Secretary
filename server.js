@@ -725,19 +725,20 @@ function appendJsonl(filePath, obj) {
 }
 
 const POST_CALL_LOG_SYSTEM_PROMPT = `
-Ты редактор транскрипта телефонного разговора ресторана Echte Doner.
+Ты редактор транскрипта телефонного разговора с AI-секретарём.
 На входе сырой realtime-лог с репликами "Assi:" и "User:".
 Верни только очищенный лог в том же формате, без комментариев, без markdown.
 
 Правила:
 - Сохраняй порядок реплик.
 - Реплики Assi сохраняй дословно или почти дословно, потому что это текст синтеза.
-- Реплики User исправляй по контексту разговора, меню и здравому смыслу.
-- Не выдумывай новые блюда, адреса, имена и номера.
+- Реплики User исправляй только по контексту разговора, сценарию и здравому смыслу.
+- В телефонном канале речь AI иногда возвращается эхом и ошибочно попадает в строку User.
+- Если строка User повторяет реплику AI, приветствие или текст сценария от лица звонящего AI, убери дубль либо перенеси её в Assi, если такой реплики Assi ещё нет.
+- Не переноси настоящие ответы клиента в Assi только из-за делового или длинного текста.
+- Не выдумывай новые факты, услуги, адреса, имена, суммы и номера.
 - Если фразу невозможно восстановить уверенно, пиши: User: [неразборчиво]
 - Если понятно только частично, оставь понятную часть и пометь сомнение скобками: [неразборчиво].
-- Исправляй очевидные ошибки ASR: "Артамонов" -> "самовывоз", "Кукие" -> "Кулакова", "Эрам" -> "айран", "Доброе коло" -> "Добрый Кола", если это подтверждается контекстом.
-- Слова домена: доставка, самовывоз, Пушкина 25, Кулакова 29Д, дёнер, Дюрюм Дёнер, картофель фри, картофель по-деревенски, Добрый Кола, фирменный морс, айран.
 `.trim();
 
 function buildPostCallLogUserPrompt(rawLog, callInfo = {}) {
@@ -745,6 +746,9 @@ function buildPostCallLogUserPrompt(rawLog, callInfo = {}) {
   return [
     `DID: ${callInfo.did || '-'}`,
     `Caller: ${callInfo.callerId || '-'}`,
+    `Direction: ${callInfo.direction || '-'}`,
+    `Greeting: ${String(callInfo.greetingText || '-').slice(0, 800)}`,
+    `Assistant scenario: ${String(callInfo.instructions || '-').slice(0, 4000)}`,
     '',
     'Сырой лог:',
     clipped || '[пустой лог]',
@@ -1378,7 +1382,8 @@ const metadataServer = http.createServer(async (req, res) => {
 
       const body = await readJsonBody(req);
       const existing = getCallMeta(body.uuid);
-      const platformProfile = existing?.platformProfile || await resolvePlatformProfile(body) || null;
+      const latestPlatformProfile = await resolvePlatformProfile(body);
+      const platformProfile = latestPlatformProfile || existing?.platformProfile || null;
       const mergedBody = {
         ...(existing?.raw || {}),
         ...body,
@@ -1630,6 +1635,7 @@ function buildSessionUpdate(clientCfg, callMeta) {
   const tools = isCalendarToolEnabled(clientCfg) ? [buildCalendarToolDefinition()] : [];
   const session = {
     type: 'realtime',
+    model: clientCfg.realtimeModel || CONFIG.realtimeModel,
     output_modalities: ['audio'],
     instructions: runtimeInstructions,
     max_output_tokens: clientCfg.maxResponseOutputTokens,
@@ -1683,6 +1689,45 @@ function normalizeIntentText(text) {
       .trim();
 
   return normalized;
+}
+
+function normalizeTranscriptComparison(text) {
+  return String(text || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+}
+
+function spokenTextSimilarity(left, right) {
+  const normalizedLeft = normalizeTranscriptComparison(left);
+  const normalizedRight = normalizeTranscriptComparison(right);
+
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+
+  const shorter = normalizedLeft.length <= normalizedRight.length ? normalizedLeft : normalizedRight;
+  const longer = shorter === normalizedLeft ? normalizedRight : normalizedLeft;
+  if (shorter.length >= 32 && longer.includes(shorter)) {
+    return shorter.length / longer.length;
+  }
+
+  const leftTokens = new Set(normalizedLeft.split(' ').filter((token) => token.length > 1));
+  const rightTokens = new Set(normalizedRight.split(' ').filter((token) => token.length > 1));
+  if (leftTokens.size < 4 || rightTokens.size < 4) return 0;
+
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) intersection += 1;
+  }
+
+  return (2 * intersection) / (leftTokens.size + rightTokens.size);
+}
+
+function isLikelyAssistantEcho(userText, assistantText) {
+  const normalizedUser = normalizeTranscriptComparison(userText);
+  if (normalizedUser.split(' ').length < 4) return false;
+  return spokenTextSimilarity(userText, assistantText) >= 0.78;
 }
 
 const FORWARD_HUMAN_TARGETS = [
@@ -1844,6 +1889,10 @@ const audioServer = net.createServer((socket) => {
   let playbackStarted = false;
 
   let pendingAssistantTranscript = '';
+  let greetingSent = false;
+  let voiceConfirmationAttempts = 0;
+  let suppressNextEchoResponse = false;
+  const assistantTranscriptHistory = [];
   let pendingFinalHangupReason = null;
   let finalHangupTimer = null;
   let assistantPlaybackUntil = 0;
@@ -1868,6 +1917,7 @@ const audioServer = net.createServer((socket) => {
     outboundContactId: null,
     model: CONFIG.realtimeModel,
     voice: null,
+    confirmedVoice: null,
     bytesFromAsterisk: 0,
     bytesToAsterisk: 0,
     pcm24BytesToOpenAI: 0,
@@ -2038,6 +2088,7 @@ const audioServer = net.createServer((socket) => {
     summary.outboundContactId = clientCfg?.outboundContact?.id || meta?.outboundContactId || null;
     summary.model = clientCfg.realtimeModel || CONFIG.realtimeModel;
     summary.voice = clientCfg.voice;
+    summary.confirmedVoice = null;
     summary.platform.assistantProfileId = clientCfg.assistantProfileId || null;
 
     writeJson(metaPath, { summary, meta, clientCfg });
@@ -2058,6 +2109,29 @@ const audioServer = net.createServer((socket) => {
       text,
       ...extra,
     });
+  }
+
+  function commitAssistantTranscript(text, extra = {}) {
+    const clean = String(text || '').trim();
+    if (!clean) return false;
+
+    const previous = assistantTranscriptHistory.at(-1);
+    if (previous && spokenTextSimilarity(previous, clean) >= 0.96) {
+      return false;
+    }
+
+    assistantTranscriptHistory.push(clean);
+    if (assistantTranscriptHistory.length > 12) assistantTranscriptHistory.shift();
+    summary.turns.assistant += 1;
+    totalTextSpeech += `\nAssi: ${clean}`;
+    log('[TTS-TXT]', clean);
+    pushTranscript('assistant', clean, extra);
+    return true;
+  }
+
+  function findAssistantEchoMatch(userText) {
+    const candidates = [pendingAssistantTranscript, ...assistantTranscriptHistory.slice(-6)].filter(Boolean);
+    return candidates.find((candidate) => isLikelyAssistantEcho(userText, candidate)) || null;
   }
 
   function telegramTargetForCall() {
@@ -2184,6 +2258,9 @@ const audioServer = net.createServer((socket) => {
       did: summary.did,
       callerId: summary.callerId,
       clientId: summary.clientId,
+      direction: summary.direction,
+      greetingText: clientCfg.greetingText,
+      instructions: clientCfg.instructions,
     }).then(async (processed) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');
@@ -2590,12 +2667,27 @@ const audioServer = net.createServer((socket) => {
           break;
 
         case 'session.updated':
-          sessionReady = true;
-          if (handshakeTimer) clearTimeout(handshakeTimer);
-          log('[OA]', 'session.updated');
+          {
+            const requestedVoice = String(clientCfg.voice || '').trim().toLowerCase();
+            const confirmedVoice = String(evt.session?.audio?.output?.voice || '').trim().toLowerCase();
+            summary.confirmedVoice = confirmedVoice || null;
 
-          if (clientCfg.autoGreeting) {
-            safeWsSend(buildGreetingResponse(clientCfg));
+            if (confirmedVoice && requestedVoice && confirmedVoice !== requestedVoice && voiceConfirmationAttempts < 1) {
+              voiceConfirmationAttempts += 1;
+              logErr('[OA]', `voice mismatch requested=${requestedVoice} confirmed=${confirmedVoice}; retrying session update`);
+              safeWsSend(buildSessionUpdate(clientCfg, meta));
+              persistMeta();
+              break;
+            }
+
+            sessionReady = true;
+            if (handshakeTimer) clearTimeout(handshakeTimer);
+            log('[OA]', `session.updated voice=${confirmedVoice || 'unreported'} requested=${requestedVoice || 'default'}`);
+            persistMeta();
+
+            if (clientCfg.autoGreeting && !greetingSent) {
+              greetingSent = safeWsSend(buildGreetingResponse(clientCfg));
+            }
           }
           break;
 
@@ -2625,6 +2717,36 @@ const audioServer = net.createServer((socket) => {
         case 'conversation.item.input_audio_transcription.completed': {
           const transcript = String(evt.transcript || '').trim();
           if (transcript) {
+            const echoMatch = findAssistantEchoMatch(transcript);
+            if (echoMatch) {
+              summary.turns.echo = (summary.turns.echo || 0) + 1;
+              log('[ASR-ECHO]', `suppressed assistant echo similarity=${spokenTextSimilarity(transcript, echoMatch).toFixed(2)}`);
+              pushTranscript('assistant_echo', transcript, {
+                itemId: evt.item_id || null,
+                contentIndex: evt.content_index ?? null,
+              });
+
+              if (pendingAssistantTranscript) {
+                commitAssistantTranscript(pendingAssistantTranscript, {
+                  responseId: currentResponseId || null,
+                  partial: true,
+                  recoveredFromEcho: true,
+                });
+                pendingAssistantTranscript = '';
+              }
+
+              if (evt.item_id) {
+                safeWsSend({ type: 'conversation.item.delete', item_id: evt.item_id });
+              }
+              if (responseActive) {
+                suppressNextEchoResponse = false;
+                cancelActiveResponse('assistant_echo');
+              } else {
+                suppressNextEchoResponse = true;
+              }
+              break;
+            }
+
             summary.turns.user += 1;
             totalTextSpeech = totalTextSpeech + "\nUser: " + transcript;
             log('[ASR]', transcript);
@@ -2649,6 +2771,13 @@ const audioServer = net.createServer((socket) => {
           break;
 
         case 'response.created':
+          if (pendingAssistantTranscript) {
+            commitAssistantTranscript(pendingAssistantTranscript, {
+              responseId: currentResponseId || null,
+              partial: true,
+              reason: 'next_response',
+            });
+          }
           responseActive = true;
           cancelRequested = false;
           responseAudioDone = false;
@@ -2656,6 +2785,10 @@ const audioServer = net.createServer((socket) => {
           currentResponseId = evt.response?.id || evt.response_id || null;
           pendingAssistantTranscript = '';
           log('[OA]', `response.created ${currentResponseId || ''}`.trim());
+          if (suppressNextEchoResponse) {
+            suppressNextEchoResponse = false;
+            cancelActiveResponse('assistant_echo');
+          }
           break;
 
         case 'response.output_item.added':
@@ -2695,10 +2828,7 @@ const audioServer = net.createServer((socket) => {
           const text = String(evt.transcript || pendingAssistantTranscript || '').trim();
           pendingAssistantTranscript = '';
           if (text) {
-            summary.turns.assistant += 1;
-            totalTextSpeech = totalTextSpeech + "\nAssi: " + text;
-            log('[TTS-TXT]', text);
-            pushTranscript('assistant', text, {
+            commitAssistantTranscript(text, {
               responseId: evt.response_id || currentResponseId || null,
               itemId: evt.item_id || null,
             });
@@ -2726,6 +2856,14 @@ const audioServer = net.createServer((socket) => {
           break;
 
         case 'response.done':
+          if (pendingAssistantTranscript) {
+            commitAssistantTranscript(pendingAssistantTranscript, {
+              responseId: currentResponseId || evt.response?.id || null,
+              partial: evt.response?.status !== 'completed',
+              reason: evt.response?.status || 'response_done',
+            });
+            pendingAssistantTranscript = '';
+          }
           responseActive = false;
           cancelRequested = false;
           currentResponseId = null;

@@ -125,6 +125,8 @@ export type OutboundContact = {
   callMode: UiMode;
   status: "PENDING" | "CALLED" | "FAILED";
   queuedForCall: boolean;
+  activeCallUuid?: string | null;
+  activeCallStartedAt?: string | null;
   attempts: number;
   nextAttemptAt?: string | null;
   lastCallLogId?: string | null;

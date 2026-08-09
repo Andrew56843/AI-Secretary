@@ -96,6 +96,8 @@ model OutboundContact {
   callMode  CallDirection         @default(OUTBOUND)
   status    OutboundContactStatus @default(PENDING)
   queuedForCall Boolean             @default(false)
+  activeCallUuid String?
+  activeCallStartedAt DateTime?
   attempts  Int                   @default(0)
   nextAttemptAt DateTime?
   lastCallLogId String?

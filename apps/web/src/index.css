@@ -1943,6 +1943,40 @@ label {
   transform: translateY(-1px);
 }
 
+.contact-row-live {
+  border-color: #8bcfb7;
+  background: #f4fcf8;
+  box-shadow: 0 0 0 3px rgba(13, 148, 112, 0.08);
+}
+
+.contact-row .outbound-call-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--brand-strong);
+  font-weight: 750;
+}
+
+.outbound-call-live::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 0 rgba(13, 148, 112, 0.34);
+  content: "";
+  animation: outbound-call-pulse 1.5s ease-out infinite;
+}
+
+@keyframes outbound-call-pulse {
+  70% {
+    box-shadow: 0 0 0 0.4rem rgba(13, 148, 112, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(13, 148, 112, 0);
+  }
+}
+
 .contact-row div {
   display: grid;
   gap: 0.18rem;
