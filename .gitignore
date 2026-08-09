@@ -10,4 +10,3 @@ apps/api/.env
 server.remote.js
 remote-*.json
 remote-*.conf
-scripts/

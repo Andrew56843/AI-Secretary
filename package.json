@@ -26,5 +26,10 @@
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "socks-proxy-agent": "^10.1.0",
+    "ws": "^8.21.3"
   }
 }
