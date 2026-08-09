@@ -23,6 +23,7 @@ import type {
   TelegramIntegration,
   UiMode
 } from "../types";
+import { clearToken, clearUser } from "./session";
 
 const legacyServerApiUrl = "93.77.186.23:14000";
 
@@ -49,6 +50,33 @@ function resolveApiUrl() {
 }
 
 const API_URL = resolveApiUrl();
+const AUTH_EXPIRED_EVENT = "ai-secretary:auth-expired";
+let authExpiredHandled = false;
+
+function notifyAuthExpired() {
+  if (typeof window === "undefined" || authExpiredHandled) {
+    return;
+  }
+
+  authExpiredHandled = true;
+  clearToken();
+  clearUser();
+  window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+
+  window.setTimeout(() => {
+    if (window.location.pathname !== "/auth") {
+      window.location.replace("/auth");
+    }
+  }, 0);
+}
+
+export function listenForAuthExpired(callback: () => void) {
+  window.addEventListener(AUTH_EXPIRED_EVENT, callback);
+
+  return () => {
+    window.removeEventListener(AUTH_EXPIRED_EVENT, callback);
+  };
+}
 
 type ApiRequestOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
@@ -70,6 +98,9 @@ async function request<T>(path: string, options: ApiRequestOptions = {}) {
 
   if (!response.ok) {
     const message = typeof payload.message === "string" ? payload.message : "Request failed";
+    if (options.token && response.status === 401) {
+      notifyAuthExpired();
+    }
     throw new Error(message);
   }
 
@@ -286,6 +317,9 @@ export async function fetchCallRecordingBlob(token: string, callLogId: string) {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     const message = typeof payload.message === "string" ? payload.message : "Recording request failed";
+    if (response.status === 401) {
+      notifyAuthExpired();
+    }
     throw new Error(message);
   }
 

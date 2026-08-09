@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { listenForAuthExpired } from "./lib/api";
 import { clearToken, clearUser, getToken, getUser, setToken, setUser } from "./lib/session";
 import { AuthPage } from "./pages/AuthPage";
 import { AdminPage } from "./pages/AdminPage";
@@ -41,6 +42,10 @@ export default function App() {
     setTokenState(null);
     setUserState(null);
   }
+
+  useEffect(() => {
+    return listenForAuthExpired(handleLogout);
+  }, []);
 
   return (
     <BrowserRouter>
