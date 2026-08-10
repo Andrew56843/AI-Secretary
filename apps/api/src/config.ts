@@ -29,6 +29,7 @@ const envSchema = z.object({
   PHONE_VERIFICATION_CALL_NUMBER: z.string().trim().min(1).default("+79952225212"),
   PHONE_VERIFICATION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   TELEGRAM_BOT_TOKEN: optionalString,
+  TELEGRAM_PROXY_URL: optionalString,
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()

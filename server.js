@@ -10,6 +10,7 @@ const https = require('https');
 const { exec } = require('child_process');
 const WebSocket = require('ws');
 
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const {
   findLikelyTranscriptionPromptLeak,
@@ -133,12 +134,16 @@ if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) {
   console.warn('[BOOT] Platform API integration is not configured. Falling back to clients.json only.');
 }
 
-const proxyAgent = CONFIG.openAiProxyUrl
-    ? new SocksProxyAgent(CONFIG.openAiProxyUrl)
-    : null;
-const telegramProxyAgent = CONFIG.telegramProxyUrl
-    ? new SocksProxyAgent(CONFIG.telegramProxyUrl)
-    : null;
+function createProxyAgent(proxyUrl) {
+  if (/^socks(?:4|5|5h)?:\/\//i.test(proxyUrl)) {
+    return new SocksProxyAgent(proxyUrl);
+  }
+
+  return new HttpsProxyAgent(proxyUrl);
+}
+
+const proxyAgent = CONFIG.openAiProxyUrl ? createProxyAgent(CONFIG.openAiProxyUrl) : null;
+const telegramProxyAgent = CONFIG.telegramProxyUrl ? createProxyAgent(CONFIG.telegramProxyUrl) : null;
 
 fs.mkdirSync(CONFIG.recordsDir, { recursive: true });
 

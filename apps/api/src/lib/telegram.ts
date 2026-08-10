@@ -1,4 +1,9 @@
 import { TranscriptChannel, TranscriptDeliveryStatus } from "@prisma/client";
+import http from "node:http";
+import https from "node:https";
+import { randomBytes } from "node:crypto";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { SocksProxyAgent } from "socks-proxy-agent";
 import { env } from "../config.js";
 import { prisma } from "./prisma.js";
 
@@ -9,6 +14,11 @@ const MAX_CAPTION_LENGTH = 900;
 type TelegramApiResponse = {
   ok?: boolean;
   description?: string;
+};
+
+type TelegramHttpResponse = {
+  statusCode: number;
+  payload: TelegramApiResponse;
 };
 
 type TelegramTargetInput = {
@@ -74,41 +84,103 @@ function buildTranscriptMessage(input: { direction?: string | null; customerPhon
   return [header, transcript].filter(Boolean).join("\n\n");
 }
 
-async function postTelegramJson(method: string, body: Record<string, unknown>) {
-  if (!env.TELEGRAM_BOT_TOKEN) {
-    throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+function createTelegramProxyAgent(proxyUrl: string) {
+  if (proxyUrl.startsWith("socks://") || proxyUrl.startsWith("socks4://") || proxyUrl.startsWith("socks5://")) {
+    return new SocksProxyAgent(proxyUrl) as unknown as http.Agent;
   }
 
-  const response = await fetch(`${TELEGRAM_API_URL}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  return new HttpsProxyAgent(proxyUrl) as unknown as http.Agent;
+}
 
-  const payload = (await response.json().catch(() => ({}))) as TelegramApiResponse;
-  if (!response.ok || !payload.ok) {
+const telegramProxyAgent = env.TELEGRAM_PROXY_URL ? createTelegramProxyAgent(env.TELEGRAM_PROXY_URL) : undefined;
+
+function requestTelegram(method: string, body: Buffer, contentType: string): Promise<TelegramHttpResponse> {
+  if (!env.TELEGRAM_BOT_TOKEN) {
+    return Promise.reject(new Error("TELEGRAM_BOT_TOKEN is not configured"));
+  }
+
+  const url = new URL(`${TELEGRAM_API_URL}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`);
+
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      url,
+      {
+        method: "POST",
+        agent: telegramProxyAgent,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": body.length
+        },
+        timeout: 30_000
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => {
+          const responseText = Buffer.concat(chunks).toString("utf8");
+          let payload: TelegramApiResponse = {};
+          try {
+            payload = responseText ? (JSON.parse(responseText) as TelegramApiResponse) : {};
+          } catch {
+            reject(new Error(`Telegram ${method} returned an invalid response`));
+            return;
+          }
+
+          resolve({ statusCode: response.statusCode ?? 0, payload });
+        });
+      }
+    );
+
+    request.on("timeout", () => request.destroy(new Error(`Telegram ${method} timed out`)));
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+function multipartTextField(boundary: string, name: string, value: string) {
+  return Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+      `${value}\r\n`,
+    "utf8"
+  );
+}
+
+async function postTelegramJson(method: string, body: Record<string, unknown>) {
+  const requestBody = Buffer.from(JSON.stringify(body), "utf8");
+  const { statusCode, payload } = await requestTelegram(method, requestBody, "application/json");
+  if (statusCode < 200 || statusCode >= 300 || !payload.ok) {
     throw new Error(payload.description ?? `Telegram ${method} failed`);
   }
 }
 
 async function postTelegramDocument(chatId: string, message: string, fileName: string) {
-  if (!env.TELEGRAM_BOT_TOKEN) {
-    throw new Error("TELEGRAM_BOT_TOKEN is not configured");
-  }
-
-  const form = new FormData();
-  form.append("chat_id", chatId);
   const captionHeader = message.split(/\r?\n/, 1)[0] || "call end";
-  form.append("caption", `${captionHeader}\nТранскрипт во вложении.`.slice(0, MAX_CAPTION_LENGTH));
-  form.append("document", new Blob([message], { type: "text/plain;charset=utf-8" }), fileName);
-
-  const response = await fetch(`${TELEGRAM_API_URL}/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, {
-    method: "POST",
-    body: form
-  });
-
-  const payload = (await response.json().catch(() => ({}))) as TelegramApiResponse;
-  if (!response.ok || !payload.ok) {
+  const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const boundary = `----callsec-${randomBytes(12).toString("hex")}`;
+  const documentHeader = Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="document"; filename="${safeFileName}"\r\n` +
+      "Content-Type: text/plain; charset=utf-8\r\n\r\n",
+    "utf8"
+  );
+  const requestBody = Buffer.concat([
+    multipartTextField(boundary, "chat_id", chatId),
+    multipartTextField(
+      boundary,
+      "caption",
+      `${captionHeader}\nТранскрипт во вложении.`.slice(0, MAX_CAPTION_LENGTH)
+    ),
+    documentHeader,
+    Buffer.from(message, "utf8"),
+    Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")
+  ]);
+  const { statusCode, payload } = await requestTelegram(
+    "sendDocument",
+    requestBody,
+    `multipart/form-data; boundary=${boundary}`
+  );
+  if (statusCode < 200 || statusCode >= 300 || !payload.ok) {
     throw new Error(payload.description ?? "Telegram sendDocument failed");
   }
 }
