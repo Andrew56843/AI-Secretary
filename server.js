@@ -300,7 +300,7 @@ async function resolvePlatformProfile(meta) {
 
   try {
     const payload = {
-      uuid: meta.uuid || undefined,
+      uuid: normalizeUuid(meta.uuid) || meta.uuid || undefined,
       did: meta.did || undefined,
       callerId: meta.callerId || undefined,
       direction: meta.direction || undefined,
@@ -1536,6 +1536,11 @@ function buildCalendarToolInstruction(clientCfg) {
 
   const timeZone = getClientTimeZone(clientCfg);
   return [
+    'Use callsec_calendar_action with FIND_SLOTS to read the connected Google Calendar live before offering appointment times.',
+    'Use FIND_APPOINTMENTS when the caller wants to cancel or move an existing appointment but does not remember its exact date or time. It searches only appointments matching the caller phone.',
+    'FIND_SLOTS requires rangeStartDateTime, rangeEndDateTime, and durationMinutes. Offer only slots returned by the tool.',
+    'The server also enforces working hours, lunch or other breaks, and the minimum gap between customers when those rules are written in the account scenario.',
+    'For a new appointment, call FIND_SLOTS before CREATE. For a move, call FIND_SLOTS for the new period and then RESCHEDULE; do not implement a move as CANCEL plus CREATE.',
     'У тебя подключён инструмент Google Calendar callsec_calendar_action.',
     `Рабочая временная зона клиента: ${timeZone}. Текущее локальное время: ${getReferenceLocalDateTime(timeZone)}.`,
     'Когда клиент хочет создать, перенести или отменить запись, сначала собери только минимально нужные данные.',
@@ -1555,7 +1560,7 @@ function buildCalendarToolDefinition() {
     type: 'function',
     name: 'callsec_calendar_action',
     description: [
-      'Create, cancel, or reschedule an appointment in the connected Google Calendar.',
+      'Find live availability or caller appointments, create, cancel, or reschedule an appointment in the connected Google Calendar.',
       'Call this only after collecting the required appointment details and before confirming success to the caller.',
     ].join(' '),
     parameters: {
@@ -1564,7 +1569,7 @@ function buildCalendarToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          enum: ['CREATE', 'CANCEL', 'RESCHEDULE'],
+          enum: ['FIND_SLOTS', 'FIND_APPOINTMENTS', 'CREATE', 'CANCEL', 'RESCHEDULE'],
           description: 'Calendar action to perform.',
         },
         title: {
@@ -1585,7 +1590,7 @@ function buildCalendarToolDefinition() {
         },
         targetDate: {
           type: 'string',
-          description: 'Existing appointment date as YYYY-MM-DD when exact time is unknown. Omit if unknown.',
+          description: 'Existing appointment date as YYYY-MM-DD for CANCEL, RESCHEDULE, or FIND_APPOINTMENTS when exact time is unknown. Omit if unknown.',
         },
         startDateTime: {
           type: 'string',
@@ -1594,6 +1599,26 @@ function buildCalendarToolDefinition() {
         endDateTime: {
           type: 'string',
           description: 'New appointment end time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
+        },
+        rangeStartDateTime: {
+          type: 'string',
+          description: 'Start of the period to inspect for FIND_SLOTS or FIND_APPOINTMENTS, ISO 8601 with UTC offset.',
+        },
+        rangeEndDateTime: {
+          type: 'string',
+          description: 'End of the period to inspect for FIND_SLOTS or FIND_APPOINTMENTS, ISO 8601 with UTC offset. FIND_SLOTS must not exceed 14 days.',
+        },
+        durationMinutes: {
+          type: 'integer',
+          minimum: 5,
+          maximum: 480,
+          description: 'Appointment duration for FIND_SLOTS. Infer it from the service rules in the scenario; use 30 only when no duration is provided.',
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 10,
+          description: 'Maximum number of slots to return for FIND_SLOTS. Usually request 3.',
         },
       },
       required: ['action'],
@@ -2192,6 +2217,7 @@ const audioServer = net.createServer((socket) => {
 
     const response = await sendPlatformCallLog({
       assistantProfileId,
+      callUuid: uuidHex || meta?.uuid || undefined,
       did: summary.did || undefined,
       outboundContactId: outboundContactId || undefined,
       direction,
@@ -2456,7 +2482,7 @@ const audioServer = net.createServer((socket) => {
 
   function normalizeCalendarToolArgs(args) {
     const action = String(args?.action || '').toUpperCase();
-    const allowed = new Set(['CREATE', 'CANCEL', 'RESCHEDULE']);
+    const allowed = new Set(['FIND_SLOTS', 'FIND_APPOINTMENTS', 'CREATE', 'CANCEL', 'RESCHEDULE']);
     const normalized = {
       action: allowed.has(action) ? action : 'NONE',
     };
@@ -2469,10 +2495,19 @@ const audioServer = net.createServer((socket) => {
       'targetDate',
       'startDateTime',
       'endDateTime',
+      'rangeStartDateTime',
+      'rangeEndDateTime',
     ]) {
       const value = args?.[key];
       if (value != null && String(value).trim()) {
         normalized[key] = String(value).trim();
+      }
+    }
+
+    for (const key of ['durationMinutes', 'limit']) {
+      const value = Number(args?.[key]);
+      if (Number.isInteger(value) && value > 0) {
+        normalized[key] = value;
       }
     }
 

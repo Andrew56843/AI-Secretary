@@ -40,6 +40,7 @@ const resolveCallSchema = z
 
 const createCallLogSchema = z.object({
   assistantProfileId: z.string().trim().min(1).optional(),
+  callUuid: z.string().trim().max(80).optional(),
   did: z.string().trim().min(1).max(64).optional(),
   outboundContactId: z.string().trim().min(1).optional(),
   direction: z.enum(["INBOUND", "OUTBOUND"]).default("INBOUND"),
@@ -506,8 +507,52 @@ function buildDefaultSummary(status: CallStatus, customerPhone: string) {
 }
 
 function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult, action: z.infer<typeof calendarActionInputSchema>) {
+  if (result.status === "availability") {
+    if (!result.available) {
+      return [
+        "The connected Google Calendar was checked live and has no available slots in the requested range.",
+        "Briefly tell the caller in Russian that this period is unavailable and ask for another day or time range.",
+        "Do not invent a slot."
+      ].join(" ");
+    }
+
+    const slots = result.slots.map((slot) => `${slot.startDateTime} - ${slot.endDateTime}`).join("; ");
+    return [
+      `The connected Google Calendar was checked live. Available slots in ${result.timeZone}: ${slots}.`,
+      "Offer up to three of these slots in Russian and let the caller choose.",
+      "Do not claim that an appointment was created until CREATE or RESCHEDULE succeeds."
+    ].join(" ");
+  }
+
+  if (result.status === "appointments") {
+    if (!result.found) {
+      return [
+        "The connected Google Calendar was checked live and no future appointment matching this caller phone was found.",
+        "Tell the caller this briefly in Russian and ask for the original date, time, or name.",
+        "Do not claim that anything was cancelled or moved."
+      ].join(" ");
+    }
+
+    const appointments = result.appointments
+      .map((appointment) => `${appointment.title}: ${appointment.startDateTime} - ${appointment.endDateTime}`)
+      .join("; ");
+    return [
+      `The connected Google Calendar was checked live. Appointments matching this caller phone in ${result.timeZone}: ${appointments}.`,
+      "Briefly identify the matching appointment in Russian and confirm which one the caller means before CANCEL or RESCHEDULE.",
+      "Do not reveal appointments belonging to other phone numbers."
+    ].join(" ");
+  }
+
   const actionText =
-    action.action === "CREATE" ? "запись" : action.action === "CANCEL" ? "отмену записи" : "перенос записи";
+    action.action === "CREATE"
+      ? "запись"
+      : action.action === "CANCEL"
+        ? "отмену записи"
+        : action.action === "RESCHEDULE"
+          ? "перенос записи"
+          : action.action === "FIND_APPOINTMENTS"
+            ? "поиск записи"
+            : "поиск свободного времени";
 
   if (result.status === "created" || result.status === "exists") {
     return [
@@ -534,6 +579,12 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
   }
 
   if (result.status === "conflict") {
+    if (result.reason === "OUTSIDE_WORKING_HOURS") {
+      return "The requested time is outside the working hours declared in the scenario. Explain this briefly in Russian and use FIND_SLOTS for another period.";
+    }
+    if (result.reason === "SCHEDULE_BREAK") {
+      return "The requested time overlaps lunch or another break declared in the scenario. Explain this briefly in Russian and use FIND_SLOTS for another period.";
+    }
     return [
       "Запрошенное время занято в Google Calendar.",
       "Скажи клиенту, что это время занято, и попроси выбрать другое время.",
@@ -575,7 +626,8 @@ voiceInternalRouter.post("/calendar/action", requireVoiceService, async (req, re
     },
     select: {
       id: true,
-      userId: true
+      userId: true,
+      prompt: true
     }
   });
 
@@ -593,7 +645,8 @@ voiceInternalRouter.post("/calendar/action", requireVoiceService, async (req, re
     direction: payload.direction === "OUTBOUND" ? CallDirection.OUTBOUND : CallDirection.INBOUND,
     action: payload.action,
     transcript: payload.transcript,
-    createdAt: new Date()
+    createdAt: new Date(),
+    assistantPrompt: profile.prompt
   });
 
   res.json({
@@ -695,6 +748,30 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
       data: {
         activeCallUuid: parsed.data.uuid ?? null,
         activeCallStartedAt: now
+      }
+    });
+  }
+
+  if (parsed.data.uuid) {
+    const customerPhone = normalizePhone(parsed.data.callerId ?? "") || parsed.data.callerId || "unknown";
+    await prisma.activeCall.upsert({
+      where: { callUuid: parsed.data.uuid },
+      create: {
+        userId: profile.userId,
+        assistantProfileId: profile.id,
+        callUuid: parsed.data.uuid,
+        outboundContactId: outboundContact?.id ?? null,
+        direction: direction ?? profile.mode,
+        customerPhone,
+        startedAt: now
+      },
+      update: {
+        userId: profile.userId,
+        assistantProfileId: profile.id,
+        outboundContactId: outboundContact?.id ?? null,
+        direction: direction ?? profile.mode,
+        customerPhone,
+        startedAt: now
       }
     });
   }
@@ -924,6 +1001,10 @@ voiceInternalRouter.post("/outbound/release", requireVoiceService, async (req, r
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );
 
+  await prisma.activeCall.deleteMany({
+    where: { outboundContactId: parsed.data.outboundContactId }
+  });
+
   res.json({ ok: true, result, reason: parsed.data.reason ?? null });
 });
 
@@ -936,6 +1017,12 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
 
   const payload = parsed.data;
   const direction = payload.direction === "OUTBOUND" ? CallDirection.OUTBOUND : CallDirection.INBOUND;
+
+  if (payload.callUuid) {
+    await prisma.activeCall.deleteMany({
+      where: { callUuid: payload.callUuid }
+    });
+  }
 
   const profile = payload.assistantProfileId
     ? await prisma.assistantProfile.findUnique({

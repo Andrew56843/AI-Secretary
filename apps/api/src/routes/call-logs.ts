@@ -146,6 +146,30 @@ callLogsRouter.get("/me", requireAuth, async (req, res) => {
   res.json({ logs, pagination });
 });
 
+callLogsRouter.get("/me/active", requireAuth, async (req, res) => {
+  const staleBefore = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  await prisma.activeCall.deleteMany({
+    where: {
+      userId: req.user!.userId,
+      startedAt: { lt: staleBefore }
+    }
+  });
+
+  const calls = await prisma.activeCall.findMany({
+    where: { userId: req.user!.userId },
+    select: {
+      id: true,
+      callUuid: true,
+      direction: true,
+      customerPhone: true,
+      startedAt: true
+    },
+    orderBy: { startedAt: "desc" }
+  });
+
+  res.json({ calls });
+});
+
 callLogsRouter.get("/:id/recording", requireAuth, async (req, res) => {
   const parsed = callLogParamsSchema.safeParse(req.params);
   if (!parsed.success) {

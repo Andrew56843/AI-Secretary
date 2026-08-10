@@ -102,6 +102,14 @@ export type CallLog = {
   transcriptDeliveries?: TranscriptDelivery[];
 };
 
+export type ActiveCall = {
+  id: string;
+  callUuid: string;
+  direction: "INBOUND" | "OUTBOUND";
+  customerPhone: string;
+  startedAt: string;
+};
+
 export type TranscriptDelivery = {
   id: string;
   channel: "TELEGRAM";

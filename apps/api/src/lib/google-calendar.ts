@@ -13,6 +13,10 @@ const ACCESS_TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
 const EXACT_TIME_SEARCH_BEFORE_MS = 2 * 60 * 60 * 1000;
 const EXACT_TIME_SEARCH_AFTER_MS = 4 * 60 * 60 * 1000;
 const FUTURE_SEARCH_DAYS = 90;
+const MAX_AVAILABILITY_RANGE_DAYS = 14;
+const DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
+const DEFAULT_AVAILABILITY_LIMIT = 5;
+const AVAILABILITY_STEP_MINUTES = 15;
 
 const openAiChatCompletionSchema = z.object({
   choices: z
@@ -28,7 +32,7 @@ const openAiChatCompletionSchema = z.object({
 
 const calendarActionValueSchema = z.preprocess(
   (value) => String(value ?? "NONE").toUpperCase(),
-  z.enum(["CREATE", "CANCEL", "RESCHEDULE", "NONE"])
+  z.enum(["CREATE", "CANCEL", "RESCHEDULE", "FIND_SLOTS", "FIND_APPOINTMENTS", "NONE"])
 );
 
 const calendarActionExtractionSchema = z.object({
@@ -41,7 +45,29 @@ const calendarActionExtractionSchema = z.object({
   targetEndDateTime: z.string().trim().max(80).optional().nullable(),
   targetDate: z.string().trim().max(10).optional().nullable(),
   startDateTime: z.string().trim().max(80).optional().nullable(),
-  endDateTime: z.string().trim().max(80).optional().nullable()
+  endDateTime: z.string().trim().max(80).optional().nullable(),
+  rangeStartDateTime: z.string().trim().max(80).optional().nullable(),
+  rangeEndDateTime: z.string().trim().max(80).optional().nullable(),
+  durationMinutes: z.coerce.number().int().min(5).max(8 * 60).optional().nullable(),
+  limit: z.coerce.number().int().min(1).max(10).optional().nullable()
+});
+
+const timeOfDaySchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const scheduleIntervalSchema = z
+  .object({
+    daysOfWeek: z.array(z.number().int().min(1).max(7)).max(7).optional().default([]),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+    start: timeOfDaySchema,
+    end: timeOfDaySchema,
+    label: z.string().trim().max(120).optional().nullable()
+  })
+  .refine((interval) => interval.daysOfWeek.length > 0 || Boolean(interval.date), {
+    message: "Schedule interval needs daysOfWeek or date"
+  });
+const calendarSchedulePolicySchema = z.object({
+  gapMinutes: z.coerce.number().int().min(0).max(240).optional().nullable(),
+  workingHours: z.array(scheduleIntervalSchema).max(30).optional().default([]),
+  breaks: z.array(scheduleIntervalSchema).max(30).optional().default([])
 });
 
 export const calendarActionInputSchema = calendarActionExtractionSchema;
@@ -100,7 +126,29 @@ export type CalendarAutomationResult =
   | { status: "skipped"; reason: string; action?: string }
   | { status: "created" | "exists" | "cancelled" | "rescheduled"; eventId: string | null; htmlLink: string | null }
   | { status: "not_found"; action: "CANCEL" | "RESCHEDULE"; reason: string }
-  | { status: "conflict"; action: "CREATE" | "RESCHEDULE"; eventId: string | null; htmlLink: string | null; reason: string };
+  | { status: "conflict"; action: "CREATE" | "RESCHEDULE"; eventId: string | null; htmlLink: string | null; reason: string }
+  | {
+      status: "availability";
+      available: boolean;
+      reason: string;
+      timeZone: string;
+      gapMinutes: number;
+      slots: Array<{ startDateTime: string; endDateTime: string }>;
+    }
+  | {
+      status: "appointments";
+      found: boolean;
+      reason: string;
+      timeZone: string;
+      appointments: Array<{
+        title: string;
+        startDateTime: string;
+        endDateTime: string;
+      }>;
+    };
+
+type CalendarSchedulePolicy = z.infer<typeof calendarSchedulePolicySchema>;
+const schedulePolicyCache = new Map<string, Promise<CalendarSchedulePolicy>>();
 
 export class GoogleCalendarError extends Error {
   constructor(
@@ -181,6 +229,125 @@ function parseJsonObject(text: string) {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   return JSON.parse(fenced?.[1] ?? trimmed) as unknown;
+}
+
+function emptySchedulePolicy(): CalendarSchedulePolicy {
+  return { gapMinutes: 0, workingHours: [], breaks: [] };
+}
+
+function normalizePolicyTime(hoursText: string, minutesText?: string) {
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText ?? 0);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return null;
+  }
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function extractDeterministicSchedulePolicy(assistantPrompt: string): CalendarSchedulePolicy {
+  const prompt = assistantPrompt.toLowerCase();
+  const gapMatch = prompt.match(
+    /(?:между\s+(?:клиентами|записями|визитами)|перерыв\s+между\s+(?:клиентами|записями|визитами))[^\d]{0,30}(\d{1,3})\s*(?:мин|минут)/iu
+  );
+  const gapMinutes = gapMatch ? Math.min(Number(gapMatch[1]), 240) : 0;
+  const daysOfWeek = [1, 2, 3, 4, 5, 6, 7];
+  const breaks: CalendarSchedulePolicy["breaks"] = [];
+  const breakPattern =
+    /(?:обед(?:енный\s+перерыв)?|перерыв)[^\d]{0,30}(\d{1,2})(?:[:.](\d{2}))?\s*(?:до|[-–—])\s*(\d{1,2})(?:[:.](\d{2}))?/giu;
+
+  for (const match of prompt.matchAll(breakPattern)) {
+    const start = normalizePolicyTime(match[1] ?? "", match[2]);
+    const end = normalizePolicyTime(match[3] ?? "", match[4]);
+    if (start && end && timeOfDayToMinutes(end) > timeOfDayToMinutes(start)) {
+      breaks.push({ daysOfWeek, date: null, start, end, label: match[0].includes("обед") ? "lunch" : "break" });
+    }
+  }
+
+  const workingHours: CalendarSchedulePolicy["workingHours"] = [];
+  const workMatch = prompt.match(
+    /(?:работаем|рабоч(?:ее\s+время|ие\s+часы)|принимаем\s+клиентов)[^\d]{0,30}(\d{1,2})(?:[:.](\d{2}))?\s*(?:до|[-–—])\s*(\d{1,2})(?:[:.](\d{2}))?/iu
+  );
+  if (workMatch) {
+    const start = normalizePolicyTime(workMatch[1] ?? "", workMatch[2]);
+    const end = normalizePolicyTime(workMatch[3] ?? "", workMatch[4]);
+    if (start && end && timeOfDayToMinutes(end) > timeOfDayToMinutes(start)) {
+      workingHours.push({ daysOfWeek, date: null, start, end, label: "working hours" });
+    }
+  }
+
+  return { gapMinutes, workingHours, breaks };
+}
+
+async function extractSchedulePolicyFromPrompt(assistantPrompt: string | null | undefined) {
+  const prompt = assistantPrompt?.trim();
+  if (!prompt) {
+    return emptySchedulePolicy();
+  }
+
+  const deterministicPolicy = extractDeterministicSchedulePolicy(prompt);
+
+  const cached = schedulePolicyCache.get(prompt);
+  if (cached) {
+    return cached;
+  }
+
+  const extraction = (async () => {
+    try {
+      const completion = await postOpenAiJson("/chat/completions", {
+        model: env.PROMPT_EDITOR_MODEL,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: [
+              "Extract only explicit appointment schedule constraints from an AI secretary scenario.",
+              "Return strict JSON with gapMinutes, workingHours, and breaks.",
+              "gapMinutes is the minimum empty time required between consecutive customers.",
+              "Use ISO weekday numbers: Monday=1 through Sunday=7.",
+              "Use HH:mm local wall-clock times. Expand daily/every-day rules to days 1 through 7.",
+              "For a one-time exception, use date as YYYY-MM-DD and an empty daysOfWeek array.",
+              "workingHours contains explicit business or appointment hours only.",
+              "breaks contains lunch and any other explicit recurring unavailable periods.",
+              "Do not infer missing hours, gaps, or breaks. Use zero and empty arrays when absent.",
+              'JSON example: {"gapMinutes":15,"workingHours":[{"daysOfWeek":[1,2,3,4,5],"date":null,"start":"09:00","end":"18:00","label":null}],"breaks":[{"daysOfWeek":[1,2,3,4,5],"date":null,"start":"13:00","end":"14:00","label":"lunch"}]}.'
+            ].join("\n")
+          },
+          {
+            role: "user",
+            content: prompt.slice(0, 12_000)
+          }
+        ]
+      });
+      const parsedCompletion = openAiChatCompletionSchema.safeParse(completion);
+      const content = parsedCompletion.success ? parsedCompletion.data.choices[0]?.message.content : null;
+      if (!content) {
+        return emptySchedulePolicy();
+      }
+
+      const parsed = calendarSchedulePolicySchema.safeParse(parseJsonObject(content));
+      return parsed.success
+        ? {
+            gapMinutes: Math.max(parsed.data.gapMinutes ?? 0, deterministicPolicy.gapMinutes ?? 0),
+            workingHours: parsed.data.workingHours.length > 0 ? parsed.data.workingHours : deterministicPolicy.workingHours,
+            breaks: parsed.data.breaks.length > 0 ? parsed.data.breaks : deterministicPolicy.breaks
+          }
+        : deterministicPolicy;
+    } catch (error) {
+      console.warn("Calendar schedule policy extraction failed", error);
+      return deterministicPolicy;
+    }
+  })();
+
+  if (schedulePolicyCache.size >= 100) {
+    const oldestKey = schedulePolicyCache.keys().next().value;
+    if (oldestKey) {
+      schedulePolicyCache.delete(oldestKey);
+    }
+  }
+  schedulePolicyCache.set(prompt, extraction);
+  return extraction;
 }
 
 function isValidDateTime(value: string | null | undefined) {
@@ -387,7 +554,12 @@ function buildExtractionRequest(input: {
 }
 
 function normalizeExtractedCalendarAction(extracted: CalendarActionExtraction): NormalizedCalendarAction | null {
-  if (extracted.action === "NONE" || (extracted.confidence ?? 1) < 0.65) {
+  if (
+    extracted.action === "NONE" ||
+    extracted.action === "FIND_SLOTS" ||
+    extracted.action === "FIND_APPOINTMENTS" ||
+    (extracted.confidence ?? 1) < 0.65
+  ) {
     return null;
   }
 
@@ -598,6 +770,7 @@ async function listLiveCalendarEvents(params: {
   timeMin: string;
   timeMax: string;
   customerPhone?: string;
+  maxResults?: number;
 }) {
   async function fetchList(privatePhoneOnly: boolean) {
     const url = new URL(`${GOOGLE_CALENDAR_BASE_URL}/calendars/${encodeURIComponent(params.calendarId)}/events`);
@@ -606,7 +779,7 @@ async function listLiveCalendarEvents(params: {
     url.searchParams.set("singleEvents", "true");
     url.searchParams.set("orderBy", "startTime");
     url.searchParams.set("showDeleted", "false");
-    url.searchParams.set("maxResults", "20");
+    url.searchParams.set("maxResults", String(params.maxResults ?? 250));
 
     if (privatePhoneOnly && params.customerPhone) {
       url.searchParams.set("privateExtendedProperty", `callsecCustomerPhone=${params.customerPhone}`);
@@ -620,9 +793,11 @@ async function listLiveCalendarEvents(params: {
   }
 
   const eventsById = new Map<string, GoogleCalendarEventResponse>();
-  for (const event of await fetchList(true)) {
-    if (event.id) {
-      eventsById.set(event.id, event);
+  if (params.customerPhone) {
+    for (const event of await fetchList(true)) {
+      if (event.id) {
+        eventsById.set(event.id, event);
+      }
     }
   }
   for (const event of await fetchList(false)) {
@@ -648,12 +823,109 @@ function getEventText(event: GoogleCalendarEventResponse) {
   return normalizeSearchText([event.summary, event.description].filter(Boolean).join("\n"));
 }
 
+function timeOfDayToMinutes(value: string) {
+  const [hours = 0, minutes = 0] = value.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function getLocalSchedulePoint(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(values.weekday ?? "") + 1;
+  const hour = Number(values.hour) % 24;
+
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    weekday,
+    minuteOfDay: hour * 60 + Number(values.minute)
+  };
+}
+
+function scheduleIntervalApplies(
+  interval: CalendarSchedulePolicy["workingHours"][number],
+  point: ReturnType<typeof getLocalSchedulePoint>
+) {
+  return interval.date ? interval.date === point.date : interval.daysOfWeek.includes(point.weekday);
+}
+
+function getSchedulePolicyConflict(params: {
+  startDateTime: string;
+  endDateTime: string;
+  timeZone: string;
+  policy: CalendarSchedulePolicy;
+}) {
+  const startMs = Date.parse(params.startDateTime);
+  const endMs = Date.parse(params.endDateTime);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return "INVALID_TIME_RANGE";
+  }
+
+  const start = getLocalSchedulePoint(new Date(startMs), params.timeZone);
+  const end = getLocalSchedulePoint(new Date(endMs - 1), params.timeZone);
+  if (start.date !== end.date) {
+    return "OUTSIDE_WORKING_HOURS";
+  }
+
+  const workingHours = params.policy.workingHours.filter((interval) => scheduleIntervalApplies(interval, start));
+  if (params.policy.workingHours.length > 0) {
+    const insideWorkingHours = workingHours.some(
+      (interval) =>
+        start.minuteOfDay >= timeOfDayToMinutes(interval.start) &&
+        end.minuteOfDay < timeOfDayToMinutes(interval.end)
+    );
+    if (!insideWorkingHours) {
+      return "OUTSIDE_WORKING_HOURS";
+    }
+  }
+
+  const overlapsBreak = params.policy.breaks
+    .filter((interval) => scheduleIntervalApplies(interval, start))
+    .some((interval) => {
+      const breakStart = timeOfDayToMinutes(interval.start);
+      const breakEnd = timeOfDayToMinutes(interval.end);
+      return start.minuteOfDay < breakEnd && end.minuteOfDay + 1 > breakStart;
+    });
+
+  return overlapsBreak ? "SCHEDULE_BREAK" : null;
+}
+
+function eventConflictsWithSlot(params: {
+  event: GoogleCalendarEventResponse;
+  requestedStartMs: number;
+  requestedEndMs: number;
+  gapMinutes: number;
+  excludeEventId?: string | null;
+}) {
+  if (!params.event.id || params.event.id === params.excludeEventId || params.event.transparency === "transparent") {
+    return false;
+  }
+
+  const eventStartMs = getEventStartMs(params.event);
+  const eventEndMs = getEventEndMs(params.event);
+  if (!Number.isFinite(eventStartMs) || !Number.isFinite(eventEndMs)) {
+    return false;
+  }
+
+  const gapMs = params.gapMinutes * 60 * 1000;
+  return eventStartMs < params.requestedEndMs + gapMs && eventEndMs > params.requestedStartMs - gapMs;
+}
+
 async function findConflictingEvent(params: {
   accessToken: string;
   calendarId: string;
   startDateTime: string;
   endDateTime: string;
   excludeEventId?: string | null;
+  gapMinutes?: number;
 }) {
   const requestedStartMs = Date.parse(params.startDateTime);
   const requestedEndMs = Date.parse(params.endDateTime);
@@ -662,29 +934,167 @@ async function findConflictingEvent(params: {
     return null;
   }
 
+  const gapMinutes = params.gapMinutes ?? 0;
+  const gapMs = gapMinutes * 60 * 1000;
   const events = await listLiveCalendarEvents({
     accessToken: params.accessToken,
     calendarId: params.calendarId,
-    timeMin: new Date(requestedStartMs).toISOString(),
-    timeMax: new Date(requestedEndMs).toISOString()
+    timeMin: new Date(requestedStartMs - gapMs).toISOString(),
+    timeMax: new Date(requestedEndMs + gapMs).toISOString()
   });
 
-  return (
-    events.find((event) => {
-      if (!event.id || event.id === params.excludeEventId || event.transparency === "transparent") {
-        return false;
+  return events.find((event) =>
+    eventConflictsWithSlot({
+      event,
+      requestedStartMs,
+      requestedEndMs,
+      gapMinutes,
+      excludeEventId: params.excludeEventId
+    })
+  ) ?? null;
+}
+
+async function findAvailableCalendarSlots(params: {
+  account: GoogleAccount;
+  accessToken: string;
+  action: CalendarActionExtraction;
+  policy: CalendarSchedulePolicy;
+  timeZone: string;
+}): Promise<CalendarAutomationResult> {
+  const rangeStart = params.action.rangeStartDateTime ?? params.action.startDateTime;
+  const rangeEnd = params.action.rangeEndDateTime ?? params.action.endDateTime;
+  if (!isValidDateTime(rangeStart) || !isValidDateTime(rangeEnd)) {
+    return { status: "skipped", reason: "INVALID_AVAILABILITY_RANGE", action: "FIND_SLOTS" };
+  }
+
+  const rangeStartMs = Date.parse(rangeStart!);
+  const rangeEndMs = Date.parse(rangeEnd!);
+  const maxRangeMs = MAX_AVAILABILITY_RANGE_DAYS * 24 * 60 * 60 * 1000;
+  if (rangeEndMs <= rangeStartMs || rangeEndMs - rangeStartMs > maxRangeMs) {
+    return { status: "skipped", reason: "INVALID_AVAILABILITY_RANGE", action: "FIND_SLOTS" };
+  }
+
+  const durationMinutes = params.action.durationMinutes ?? DEFAULT_AVAILABILITY_DURATION_MINUTES;
+  const durationMs = durationMinutes * 60 * 1000;
+  const limit = params.action.limit ?? DEFAULT_AVAILABILITY_LIMIT;
+  const gapMinutes = params.policy.gapMinutes ?? 0;
+  const gapMs = gapMinutes * 60 * 1000;
+  const calendarId = params.account.calendarId || "primary";
+  const events = await listLiveCalendarEvents({
+    accessToken: params.accessToken,
+    calendarId,
+    timeMin: new Date(rangeStartMs - gapMs).toISOString(),
+    timeMax: new Date(rangeEndMs + gapMs).toISOString(),
+    maxResults: 1000
+  });
+
+  const stepMs = AVAILABILITY_STEP_MINUTES * 60 * 1000;
+  let candidateStartMs = Math.ceil(rangeStartMs / stepMs) * stepMs;
+  const slots: Array<{ startDateTime: string; endDateTime: string }> = [];
+
+  while (candidateStartMs + durationMs <= rangeEndMs && slots.length < limit) {
+    const candidateEndMs = candidateStartMs + durationMs;
+    const startDateTime = new Date(candidateStartMs).toISOString();
+    const endDateTime = new Date(candidateEndMs).toISOString();
+    const policyConflict = getSchedulePolicyConflict({
+      startDateTime,
+      endDateTime,
+      timeZone: params.timeZone,
+      policy: params.policy
+    });
+    const calendarConflict = events.some((event) =>
+      eventConflictsWithSlot({
+        event,
+        requestedStartMs: candidateStartMs,
+        requestedEndMs: candidateEndMs,
+        gapMinutes
+      })
+    );
+
+    if (!policyConflict && !calendarConflict) {
+      slots.push({
+        startDateTime: getReferenceDateTime(new Date(candidateStartMs), params.timeZone),
+        endDateTime: getReferenceDateTime(new Date(candidateEndMs), params.timeZone)
+      });
+    }
+
+    candidateStartMs += stepMs;
+  }
+
+  return {
+    status: "availability",
+    available: slots.length > 0,
+    reason: slots.length > 0 ? "AVAILABLE_SLOTS_FOUND" : "NO_AVAILABLE_SLOTS",
+    timeZone: params.timeZone,
+    gapMinutes,
+    slots
+  };
+}
+
+async function findCustomerCalendarAppointments(params: {
+  account: GoogleAccount;
+  accessToken: string;
+  action: CalendarActionExtraction;
+  customerPhone: string;
+  createdAt: Date;
+  timeZone: string;
+}): Promise<CalendarAutomationResult> {
+  const phoneDigits = normalizePhoneDigits(params.customerPhone);
+  if (phoneDigits.length < 10) {
+    return { status: "skipped", reason: "CUSTOMER_PHONE_REQUIRED", action: "FIND_APPOINTMENTS" };
+  }
+
+  let timeMin = params.createdAt.toISOString();
+  let timeMax = new Date(params.createdAt.getTime() + FUTURE_SEARCH_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  if (isValidDateOnly(params.action.targetDate)) {
+    timeMin = localDateAt(params.action.targetDate!, params.timeZone, 0);
+    timeMax = new Date(Date.parse(timeMin) + 24 * 60 * 60 * 1000).toISOString();
+  } else if (isValidDateTime(params.action.rangeStartDateTime) && isValidDateTime(params.action.rangeEndDateTime)) {
+    timeMin = new Date(Date.parse(params.action.rangeStartDateTime!)).toISOString();
+    timeMax = new Date(Date.parse(params.action.rangeEndDateTime!)).toISOString();
+  }
+
+  const events = await listLiveCalendarEvents({
+    accessToken: params.accessToken,
+    calendarId: params.account.calendarId || "primary",
+    timeMin,
+    timeMax,
+    customerPhone: params.customerPhone,
+    maxResults: 250
+  });
+  const phoneSuffix = phoneDigits.slice(-10);
+  const appointments = events
+    .filter((event) => {
+      const privatePhone = normalizePhoneDigits(event.extendedProperties?.private?.callsecCustomerPhone);
+      const textPhone = normalizePhoneDigits(getEventText(event));
+      return privatePhone.endsWith(phoneSuffix) || textPhone.includes(phoneSuffix);
+    })
+    .sort((left, right) => getEventStartMs(left) - getEventStartMs(right))
+    .slice(0, params.action.limit ?? DEFAULT_AVAILABILITY_LIMIT)
+    .flatMap((event) => {
+      const startMs = getEventStartMs(event);
+      const endMs = getEventEndMs(event);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+        return [];
       }
 
-      const eventStartMs = getEventStartMs(event);
-      const eventEndMs = getEventEndMs(event);
+      return [
+        {
+          title: event.summary?.trim() || "Appointment",
+          startDateTime: getReferenceDateTime(new Date(startMs), params.timeZone),
+          endDateTime: getReferenceDateTime(new Date(endMs), params.timeZone)
+        }
+      ];
+    });
 
-      if (!Number.isFinite(eventStartMs) || !Number.isFinite(eventEndMs)) {
-        return false;
-      }
-
-      return eventStartMs < requestedEndMs && eventEndMs > requestedStartMs;
-    }) ?? null
-  );
+  return {
+    status: "appointments",
+    found: appointments.length > 0,
+    reason: appointments.length > 0 ? "CUSTOMER_APPOINTMENTS_FOUND" : "CUSTOMER_APPOINTMENTS_NOT_FOUND",
+    timeZone: params.timeZone,
+    appointments
+  };
 }
 
 function scoreCalendarEvent(params: {
@@ -798,6 +1208,7 @@ async function createGoogleCalendarEvent(params: {
   transcript: string;
   extracted: Extract<NormalizedCalendarAction, { action: "CREATE" }>;
   timeZone: string;
+  policy: CalendarSchedulePolicy;
 }) {
   const calendarId = params.account.calendarId || "primary";
   const existing = await findExistingEvent({
@@ -814,11 +1225,28 @@ async function createGoogleCalendarEvent(params: {
     } satisfies CalendarAutomationResult;
   }
 
+  const policyConflict = getSchedulePolicyConflict({
+    startDateTime: params.extracted.startDateTime,
+    endDateTime: params.extracted.endDateTime,
+    timeZone: params.timeZone,
+    policy: params.policy
+  });
+  if (policyConflict) {
+    return {
+      status: "conflict",
+      action: "CREATE",
+      eventId: null,
+      htmlLink: null,
+      reason: policyConflict
+    } satisfies CalendarAutomationResult;
+  }
+
   const conflict = await findConflictingEvent({
     accessToken: params.accessToken,
     calendarId,
     startDateTime: params.extracted.startDateTime,
-    endDateTime: params.extracted.endDateTime
+    endDateTime: params.extracted.endDateTime,
+    gapMinutes: params.policy.gapMinutes ?? 0
   });
 
   if (conflict) {
@@ -929,6 +1357,7 @@ async function rescheduleGoogleCalendarEvent(params: {
   action: Extract<NormalizedCalendarAction, { action: "RESCHEDULE" }>;
   createdAt: Date;
   timeZone: string;
+  policy: CalendarSchedulePolicy;
 }) {
   const calendarId = params.account.calendarId || "primary";
   const event = await findLiveAppointmentEvent({
@@ -945,12 +1374,29 @@ async function rescheduleGoogleCalendarEvent(params: {
   }
 
   const endDateTime = getRescheduleEndDateTime(event, params.action, params.transcript);
+  const policyConflict = getSchedulePolicyConflict({
+    startDateTime: params.action.startDateTime,
+    endDateTime,
+    timeZone: params.timeZone,
+    policy: params.policy
+  });
+  if (policyConflict) {
+    return {
+      status: "conflict",
+      action: "RESCHEDULE",
+      eventId: null,
+      htmlLink: null,
+      reason: policyConflict
+    } satisfies CalendarAutomationResult;
+  }
+
   const conflict = await findConflictingEvent({
     accessToken: params.accessToken,
     calendarId,
     startDateTime: params.action.startDateTime,
     endDateTime,
-    excludeEventId: event.id
+    excludeEventId: event.id,
+    gapMinutes: params.policy.gapMinutes ?? 0
   });
 
   if (conflict) {
@@ -1047,6 +1493,7 @@ async function executeNormalizedCalendarAction(input: {
   transcript: string;
   createdAt: Date;
   timeZone: string;
+  policy: CalendarSchedulePolicy;
 }) {
   switch (input.action.action) {
     case "CREATE":
@@ -1057,7 +1504,8 @@ async function executeNormalizedCalendarAction(input: {
         customerPhone: input.customerPhone,
         transcript: input.transcript,
         extracted: input.action,
-        timeZone: input.timeZone
+        timeZone: input.timeZone,
+        policy: input.policy
       });
     case "CANCEL":
       return cancelGoogleCalendarEvent({
@@ -1078,7 +1526,8 @@ async function executeNormalizedCalendarAction(input: {
         transcript: input.transcript,
         action: input.action,
         createdAt: input.createdAt,
-        timeZone: input.timeZone
+        timeZone: input.timeZone,
+        policy: input.policy
       });
   }
 }
@@ -1110,10 +1559,43 @@ export async function syncCalendarAction(input: {
   action: CalendarActionInput;
   transcript?: string | null;
   createdAt: Date;
+  assistantPrompt?: string | null;
 }): Promise<CalendarAutomationResult> {
   const parsed = calendarActionExtractionSchema.safeParse(input.action);
   if (!parsed.success) {
     return { status: "skipped", reason: "INVALID_CALENDAR_ACTION" };
+  }
+
+  if (parsed.data.action === "FIND_SLOTS") {
+    const context = await getConnectedCalendarContext(input.userId);
+    if (context.status !== "ready") {
+      return { status: "skipped", reason: context.reason, action: "FIND_SLOTS" };
+    }
+
+    const policy = await extractSchedulePolicyFromPrompt(input.assistantPrompt);
+    return findAvailableCalendarSlots({
+      account: context.account,
+      accessToken: context.accessToken,
+      action: parsed.data,
+      policy,
+      timeZone: context.timeZone
+    });
+  }
+
+  if (parsed.data.action === "FIND_APPOINTMENTS") {
+    const context = await getConnectedCalendarContext(input.userId);
+    if (context.status !== "ready") {
+      return { status: "skipped", reason: context.reason, action: "FIND_APPOINTMENTS" };
+    }
+
+    return findCustomerCalendarAppointments({
+      account: context.account,
+      accessToken: context.accessToken,
+      action: parsed.data,
+      customerPhone: input.customerPhone,
+      createdAt: input.createdAt,
+      timeZone: context.timeZone
+    });
   }
 
   const extracted = normalizeExtractedCalendarAction(
@@ -1127,6 +1609,7 @@ export async function syncCalendarAction(input: {
   if (context.status !== "ready") {
     return { status: "skipped", reason: context.reason, action: extracted.action };
   }
+  const policy = await extractSchedulePolicyFromPrompt(input.assistantPrompt);
 
   return executeNormalizedCalendarAction({
     account: context.account,
@@ -1136,7 +1619,8 @@ export async function syncCalendarAction(input: {
     transcript: input.transcript?.trim() || "Realtime calendar action from phone call.",
     action: extracted,
     createdAt: input.createdAt,
-    timeZone: context.timeZone
+    timeZone: context.timeZone,
+    policy
   });
 }
 
@@ -1170,6 +1654,7 @@ export async function maybeSyncCalendarFromCallLog(input: {
   if (!extracted) {
     return { status: "skipped", reason: "NO_CONFIRMED_CALENDAR_ACTION" };
   }
+  const policy = await extractSchedulePolicyFromPrompt(input.assistantPrompt);
 
   return executeNormalizedCalendarAction({
     account: context.account,
@@ -1179,7 +1664,8 @@ export async function maybeSyncCalendarFromCallLog(input: {
     transcript,
     action: extracted,
     createdAt: input.createdAt,
-    timeZone: context.timeZone
+    timeZone: context.timeZone,
+    policy
   });
 }
 

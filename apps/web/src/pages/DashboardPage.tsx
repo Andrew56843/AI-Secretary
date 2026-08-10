@@ -10,6 +10,7 @@ import {
   disconnectGoogleCalendar,
   disconnectTelegram,
   fetchCallRecordingBlob,
+  getActiveCalls,
   getBilling,
   getBillingCharges,
   getCallLogs,
@@ -27,6 +28,7 @@ import {
 } from "../lib/api";
 import type {
   AssistantProfile,
+  ActiveCall,
   AuthUser,
   BillingPagination,
   BillingState,
@@ -542,6 +544,16 @@ function formatSeconds(seconds: number) {
   return restSeconds === 0 ? `${minutes} мин` : `${minutes} мин ${restSeconds} сек`;
 }
 
+function formatLiveDuration(startedAt: string, nowMs: number) {
+  const totalSeconds = Math.max(0, Math.floor((nowMs - new Date(startedAt).getTime()) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const time = [minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+
+  return hours > 0 ? `${hours}:${time}` : time;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -671,6 +683,8 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [billingHistoryLoading, setBillingHistoryLoading] = useState(false);
   const [integrations, setIntegrations] = useState<IntegrationsState | null>(null);
   const [logsByMode, setLogsByMode] = useState<Record<UiMode, CallLog[]>>({ inbound: [], outbound: [] });
+  const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
+  const [liveClockMs, setLiveClockMs] = useState(() => Date.now());
   const [logsPaginationByMode, setLogsPaginationByMode] = useState<Record<UiMode, CallLogsPagination>>({
     inbound: DEFAULT_CALL_LOGS_PAGINATION,
     outbound: DEFAULT_CALL_LOGS_PAGINATION
@@ -747,6 +761,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           integrationsResult,
           inboundLogs,
           outboundLogs,
+          activeCallsResult,
           outboundResult,
           contactNamesResult
         ] = await Promise.all([
@@ -755,6 +770,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           getIntegrations(token),
           getCallLogs(token, "inbound", { page: 1, pageSize: CALL_LOGS_PAGE_SIZE }),
           getCallLogs(token, "outbound", { page: 1, pageSize: CALL_LOGS_PAGE_SIZE }),
+          getActiveCalls(token),
           getOutboundContacts(token, { page: 1, pageSize: OUTBOUND_CONTACTS_PAGE_SIZE }),
           getContactNames(token)
         ]);
@@ -767,6 +783,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         setBilling(billingResult.billing);
         setIntegrations(integrationsResult.integrations);
         setLogsByMode({ inbound: inboundLogs.logs, outbound: outboundLogs.logs });
+        setActiveCalls(activeCallsResult.calls);
         setLogsPaginationByMode({ inbound: inboundLogs.pagination, outbound: outboundLogs.pagination });
         setContacts(outboundResult.contacts);
         setStats(outboundResult.stats);
@@ -806,6 +823,15 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
       stopVoicePreview(false);
     };
   }, []);
+
+  useEffect(() => {
+    if (activeCalls.length === 0) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => setLiveClockMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [activeCalls.length]);
 
   const activeProfile = profiles[activeMode];
   const activeLogsPagination = logsPaginationByMode[activeMode];
@@ -1343,6 +1369,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           billingResult,
           inboundLogs,
           outboundLogs,
+          activeCallsResult,
           outboundResult,
           contactNamesResult,
           billingHistoryResult
@@ -1350,6 +1377,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           getBilling(token),
           getCallLogs(token, "inbound", { page: logsPaginationByMode.inbound.page, pageSize: CALL_LOGS_PAGE_SIZE }),
           getCallLogs(token, "outbound", { page: logsPaginationByMode.outbound.page, pageSize: CALL_LOGS_PAGE_SIZE }),
+          getActiveCalls(token),
           getOutboundContacts(token, { page: outboundPagination.page, pageSize: OUTBOUND_CONTACTS_PAGE_SIZE }),
           getContactNames(token),
           billingHistoryOpen
@@ -1363,6 +1391,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
 
         setBilling(billingResult.billing);
         setLogsByMode({ inbound: inboundLogs.logs, outbound: outboundLogs.logs });
+        setActiveCalls(activeCallsResult.calls);
         setLogsPaginationByMode({ inbound: inboundLogs.pagination, outbound: outboundLogs.pagination });
         setContacts(outboundResult.contacts);
         setStats(outboundResult.stats);
@@ -1445,6 +1474,25 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
           Входящие звонки
         </button>
       </nav>
+
+      {activeCalls.length > 0 && (
+        <section className="live-calls" aria-live="polite" aria-label="Текущие разговоры">
+          {activeCalls.map((call) => (
+            <div className="live-call" key={call.id}>
+              <span className="live-call-dot" aria-hidden="true" />
+              <div className="live-call-copy">
+                <strong>{call.direction === "INBOUND" ? "Входящий разговор идёт" : "Исходящий разговор идёт"}</strong>
+                <span>
+                  {contactNames[call.customerPhone]
+                    ? `${contactNames[call.customerPhone]} · ${call.customerPhone}`
+                    : call.customerPhone}
+                </span>
+              </div>
+              <time dateTime={call.startedAt}>{formatLiveDuration(call.startedAt, liveClockMs)}</time>
+            </div>
+          ))}
+        </section>
+      )}
 
       {(notice || error) && <div className={error ? "toast error" : "toast"}>{error ?? notice}</div>}
 
@@ -1732,7 +1780,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                   <GoogleCalendarIcon />
                   <div>
                     <strong>Google Calendar</strong>
-                    <p>AI секретарь сможет создавать и переносить записи в календаре, а телефон, планшет и ПК синхронизируют изменения автоматически.</p>
+                    <p>AI секретарь проверяет свободное время во время разговора, создаёт, переносит и отменяет записи с учётом расписания из сценария.</p>
                   </div>
                 </div>
                 <button

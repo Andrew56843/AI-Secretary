@@ -5,6 +5,7 @@ import type {
   AuthResponse,
   BillingState,
   BillingTransaction,
+  ActiveCall,
   CallLog,
   CallLogsPagination,
   GoogleIntegration,
@@ -305,6 +306,10 @@ export function getCallLogs(token: string, direction?: UiMode, params: { page?: 
   const serializedQuery = query.toString();
   const suffix = serializedQuery ? `?${serializedQuery}` : "";
   return request<{ logs: CallLog[]; pagination: CallLogsPagination }>(`/api/call-logs/me${suffix}`, { token });
+}
+
+export function getActiveCalls(token: string) {
+  return request<{ calls: ActiveCall[] }>("/api/call-logs/me/active", { token });
 }
 
 export async function fetchCallRecordingBlob(token: string, callLogId: string) {

@@ -29,6 +29,7 @@ model User {
   telegramAccount       TelegramAccount?
   transcriptDeliveries  TranscriptDelivery[]
   phoneContactNames     PhoneContactName[]
+  activeCalls           ActiveCall[]
 }
 
 model ReservedPhoneNumber {
@@ -64,10 +65,29 @@ model AssistantProfile {
   user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   reservedNumber   ReservedPhoneNumber? @relation(fields: [reservedNumberId], references: [id])
   callLogs         CallLog[]
+  activeCalls      ActiveCall[]
 
   @@unique([userId, mode])
   @@index([userId])
   @@index([reservedNumberId])
+}
+
+model ActiveCall {
+  id                 String           @id @default(cuid())
+  userId             String
+  assistantProfileId String
+  callUuid           String           @unique
+  outboundContactId  String?
+  direction          CallDirection
+  customerPhone      String
+  startedAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistantProfile   AssistantProfile @relation(fields: [assistantProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
+  @@index([outboundContactId])
 }
 
 model CallLog {
