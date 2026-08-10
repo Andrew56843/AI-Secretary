@@ -1958,6 +1958,7 @@ label {
 .pagination-page:hover:not(:disabled),
 .pagination-arrow:hover:not(:disabled) {
   border-color: var(--brand);
+  background: #eef9f5;
   color: var(--brand-strong);
   transform: translateY(-1px);
 }
@@ -1966,6 +1967,10 @@ label {
   border-color: var(--brand);
   background: var(--brand);
   color: #ffffff;
+}
+
+.pagination-page.active:disabled {
+  opacity: 1;
 }
 
 .pagination-page:disabled,
@@ -2644,10 +2649,18 @@ label {
   font-size: 0.82rem;
 }
 
-.history-row b {
+.history-amount {
   color: var(--red);
   font-size: 1rem;
   white-space: nowrap;
+}
+
+.history-amount.positive {
+  color: var(--brand-strong);
+}
+
+.history-amount.neutral {
+  color: var(--muted);
 }
 
 .top-up-form {

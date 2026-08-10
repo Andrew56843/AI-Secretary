@@ -1,18 +1,18 @@
 import { BillingTransactionType, CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
-import { assertLedgerBalanceAtLeast, createBalanceLedgerEntry } from "../lib/balance-ledger.js";
 import { billingAmountRub, kopecksToRubles, rublesToKopecks } from "../lib/money.js";
+import {
+  canRenewNumber,
+  getNumberRentDaysLeft,
+  NUMBER_RENT_PRICE_RUB,
+  rentOrRenewNumber
+} from "../lib/number-rental.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const billingRouter = Router();
 
-const NUMBER_RENT_PRICE_RUB = 299;
-const NUMBER_RENT_PRICE_KOPECKS = rublesToKopecks(NUMBER_RENT_PRICE_RUB);
-const NUMBER_RENT_PERIOD_DAYS = 30;
-const NUMBER_RENEWAL_WINDOW_DAYS = 14;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const BILLING_HISTORY_TYPES = [
   BillingTransactionType.CALL_CHARGE,
   BillingTransactionType.NUMBER_PURCHASE,
@@ -44,23 +44,6 @@ function createPagination(page: number, pageSize: number, total: number) {
   };
 }
 
-function addDays(date: Date, days: number) {
-  return new Date(date.getTime() + days * DAY_MS);
-}
-
-function getNumberRentDaysLeft(expiresAt: Date | null) {
-  if (!expiresAt) {
-    return null;
-  }
-
-  return Math.ceil((expiresAt.getTime() - Date.now()) / DAY_MS);
-}
-
-function canRenewNumber(expiresAt: Date | null) {
-  const daysLeft = getNumberRentDaysLeft(expiresAt);
-  return daysLeft === null || daysLeft <= NUMBER_RENEWAL_WINDOW_DAYS;
-}
-
 function createCloudTipsPaymentUrl(amountRub: number, userId: string) {
   const paymentUrl = new URL(CLOUDTIPS_PAYMENT_URL);
   paymentUrl.searchParams.set("amount", String(amountRub));
@@ -79,76 +62,6 @@ function serializeBillingTransaction<T extends BillingTransactionWithMoney>(tran
     ...transaction,
     amountRub: billingAmountRub(transaction.amountRub, transaction.amountKopecks)
   };
-}
-
-async function rentOrRenewNumber(tx: Prisma.TransactionClient, userId: string) {
-  const user = await tx.user.findUniqueOrThrow({
-    where: { id: userId },
-    select: {
-      numberPurchasedAt: true,
-      numberRentExpiresAt: true
-    }
-  });
-
-  await assertLedgerBalanceAtLeast(tx, userId, NUMBER_RENT_PRICE_KOPECKS);
-
-  const inboundProfile = await tx.assistantProfile.findUnique({
-    where: { userId_mode: { userId, mode: CallDirection.INBOUND } },
-    include: { reservedNumber: true }
-  });
-
-  if (!inboundProfile) {
-    throw new Error("PROFILE_NOT_FOUND");
-  }
-
-  const isNewRent = !inboundProfile.reservedNumberId;
-  let number = inboundProfile.reservedNumber;
-
-  if (!isNewRent && !canRenewNumber(user.numberRentExpiresAt)) {
-    throw new Error("RENEWAL_TOO_EARLY");
-  }
-
-  if (isNewRent) {
-    const freeNumber = await tx.reservedPhoneNumber.findFirst({
-      where: { assigned: false },
-      orderBy: { number: "asc" }
-    });
-
-    if (!freeNumber) {
-      throw new Error("NO_FREE_NUMBERS");
-    }
-
-    number = await tx.reservedPhoneNumber.update({
-      where: { id: freeNumber.id },
-      data: { assigned: true }
-    });
-
-    await tx.assistantProfile.update({
-      where: { id: inboundProfile.id },
-      data: { reservedNumberId: freeNumber.id }
-    });
-  }
-
-  const now = new Date();
-  const startsAt = user.numberRentExpiresAt && user.numberRentExpiresAt > now ? user.numberRentExpiresAt : now;
-  const numberRentExpiresAt = addDays(startsAt, NUMBER_RENT_PERIOD_DAYS);
-
-  await tx.user.update({
-    where: { id: userId },
-    data: {
-      numberPurchasedAt: user.numberPurchasedAt ?? now,
-      numberRentExpiresAt
-    }
-  });
-
-  await createBalanceLedgerEntry(tx, {
-    userId,
-    type: BillingTransactionType.NUMBER_PURCHASE,
-    amountKopecks: -NUMBER_RENT_PRICE_KOPECKS,
-    note: `${isNewRent ? "Reserved" : "Renewed"} phone number ${number?.number ?? ""}`.trim()
-  });
-
-  return number;
 }
 
 async function getBillingState(userId: string) {

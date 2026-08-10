@@ -584,7 +584,7 @@ function formatBillingTitle(transaction: BillingTransaction) {
   }
 
   if (transaction.type === "NUMBER_PURCHASE") {
-    return "Резервация номера";
+    return "Аренда номера";
   }
 
   if (transaction.type === "ADMIN_ADJUSTMENT") {
@@ -2042,7 +2042,17 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                       <span>{transaction.note ?? "AI-секретарь"}</span>
                       <small>{formatBillingMeta(transaction)}</small>
                     </div>
-                    <b>{formatRubles(transaction.amountRub ?? 0)}</b>
+                    <b
+                      className={`history-amount ${
+                        transaction.amountKopecks > 0
+                          ? "positive"
+                          : transaction.amountKopecks === 0
+                            ? "neutral"
+                            : "negative"
+                      }`}
+                    >
+                      {formatRubles(transaction.amountRub ?? 0)}
+                    </b>
                   </article>
                 ))}
             </div>

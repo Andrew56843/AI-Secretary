@@ -14,7 +14,7 @@ export function ledgerInsufficientBalanceError() {
   return new Error("INSUFFICIENT_BALANCE");
 }
 
-async function lockUserLedger(tx: Prisma.TransactionClient, userId: string) {
+export async function lockUserLedger(tx: Prisma.TransactionClient, userId: string) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId})::bigint)`;
 }
 

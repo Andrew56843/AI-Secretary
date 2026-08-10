@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { env } from "./config.js";
 import { prisma } from "./lib/prisma.js";
+import { startNumberRentalScheduler } from "./lib/number-rental.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { billingRouter } from "./routes/billing.js";
@@ -51,8 +52,10 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 const server = app.listen(env.PORT, () => {
   console.log(`API listening on http://localhost:${env.PORT}`);
 });
+const stopNumberRentalScheduler = startNumberRentalScheduler();
 
 async function shutdown() {
+  stopNumberRentalScheduler();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);
