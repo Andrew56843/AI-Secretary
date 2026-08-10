@@ -840,6 +840,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const numberRentalPrice = billing?.numberRentalPriceRub ?? 299;
   const numberRentExpiresDate = formatDate(billing?.numberRentExpiresAt);
   const numberRentDaysLeft = formatDaysLeft(billing?.numberRentDaysLeft);
+  const balanceUnavailable = Boolean(billing && billing.rubleBalance <= 0);
   const numberRentalBalanceEnough = (billing?.rubleBalance ?? 0) >= numberRentalPrice;
   const numberRentalBlockedByWindow = Boolean(reservedNumber && !billing?.numberRenewalAvailable);
   const numberRentalActionLabel = reservedNumber ? "Продлить" : "Зарезервировать номер";
@@ -1500,8 +1501,14 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         <section className="panel account-panel">
           <div>
             <p className="eyebrow">Баланс</p>
-            <h2>{billing ? formatRubles(billing.rubleBalance) : formatRubles(0)}</h2>
-            <p className="hint">Баланс списывается за входящие и исходящие разговоры AI-секретаря.</p>
+            <h2 className={balanceUnavailable ? "balance-value unavailable" : "balance-value"}>
+              {billing ? formatRubles(billing.rubleBalance) : formatRubles(0)}
+            </h2>
+            <p className={balanceUnavailable ? "hint balance-warning" : "hint"}>
+              {balanceUnavailable
+                ? "Пополните баланс: новые входящие и исходящие звонки недоступны."
+                : "Баланс списывается за входящие и исходящие разговоры AI-секретаря."}
+            </p>
           </div>
           <div className="account-actions">
             <button type="button" onClick={() => setTopUpModalOpen(true)}>

@@ -756,6 +756,29 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
+  if (profile.user.rubleBalanceKopecks <= 0) {
+    res.json({
+      ok: true,
+      call: {
+        uuid: parsed.data.uuid ?? null,
+        did: parsed.data.did ?? profile.reservedNumber?.number ?? null,
+        callerId: parsed.data.callerId ?? null,
+        action: "HANGUP",
+        reason: "INSUFFICIENT_BALANCE"
+      },
+      profile: {
+        action: "HANGUP",
+        reason: "INSUFFICIENT_BALANCE",
+        clientId: profile.id,
+        assistantProfileId: profile.id,
+        direction: direction ?? profile.mode,
+        autoGreeting: false,
+        maxDialogSeconds: 1
+      }
+    });
+    return;
+  }
+
   const [inboundProfile, outboundContact] = await Promise.all([
     direction === CallDirection.OUTBOUND
       ? prisma.assistantProfile.findUnique({

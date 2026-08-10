@@ -1281,6 +1281,11 @@ label {
   font-size: 1.35rem;
 }
 
+.balance-value.unavailable,
+.balance-warning {
+  color: var(--red);
+}
+
 .number-guide-btn {
   width: fit-content;
   max-width: 100%;

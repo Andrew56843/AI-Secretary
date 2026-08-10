@@ -22,7 +22,11 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
 
   const profile = await prisma.assistantProfile.findUnique({
     where: { userId_mode: { userId: req.user!.userId, mode: direction } },
-    select: { id: true, status: true }
+    select: {
+      id: true,
+      status: true,
+      user: { select: { rubleBalanceKopecks: true } }
+    }
   });
 
   if (!profile || profile.status !== ProfileStatus.ACTIVE) {
@@ -30,6 +34,11 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
       message:
         direction === CallDirection.OUTBOUND ? "Create outbound assistant profile first" : "Create inbound assistant profile first"
     });
+    return;
+  }
+
+  if (profile.user.rubleBalanceKopecks <= 0) {
+    res.status(402).json({ message: "Top up your balance before starting a new call" });
     return;
   }
 
