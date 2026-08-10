@@ -46,3 +46,16 @@ test('removes scenario leaks and assistant echoes before post-call processing', 
   assert.doesNotMatch(result.text, /Алёша/);
   assert.equal(result.text.match(/Имран, это MoiBike Коллектор, удобно говорить\?/g)?.length, 1);
 });
+
+test('keeps caller intent that resembles a later assistant confirmation', () => {
+  const rawLog = [
+    'Assi: Какую услугу хотите?',
+    'User: Отмените запись на 11:45.',
+    'Assi: Запись перенесена на 11:45.',
+  ].join('\n');
+
+  const result = sanitizeRealtimeTranscript(rawLog);
+
+  assert.equal(result.suppressed.length, 0);
+  assert.match(result.text, /User: Отмените запись на 11:45\./);
+});

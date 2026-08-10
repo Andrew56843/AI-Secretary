@@ -87,9 +87,7 @@ function parseTranscriptLine(line) {
 function sanitizeRealtimeTranscript(rawLog, callInfo = {}) {
   const lines = String(rawLog || '').split(/\r?\n/);
   const parsed = lines.map(parseTranscriptLine);
-  const assistantTexts = parsed
-      .filter((turn) => turn?.role === 'assistant' && turn.text)
-      .map((turn) => turn.text);
+  const previousAssistantTexts = [];
   const references = [
     callInfo.greetingText,
     callInfo.instructions,
@@ -100,6 +98,12 @@ function sanitizeRealtimeTranscript(rawLog, callInfo = {}) {
 
   lines.forEach((line, index) => {
     const turn = parsed[index];
+    if (turn?.role === 'assistant' && turn.text) {
+      previousAssistantTexts.push(turn.text);
+      kept.push(line);
+      return;
+    }
+
     if (!turn || turn.role !== 'user' || !turn.text) {
       kept.push(line);
       return;
@@ -111,7 +115,9 @@ function sanitizeRealtimeTranscript(rawLog, callInfo = {}) {
       return;
     }
 
-    const assistantEcho = assistantTexts.find((assistantText) => isLikelyAssistantEcho(turn.text, assistantText));
+    const assistantEcho = previousAssistantTexts.find((assistantText) =>
+      isLikelyAssistantEcho(turn.text, assistantText)
+    );
     if (assistantEcho) {
       suppressed.push({
         reason: 'assistant_echo',

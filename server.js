@@ -900,6 +900,8 @@ const POST_CALL_LOG_SYSTEM_PROMPT = `
 - Сохраняй порядок реплик.
 - Каждую реплику Assi копируй дословно, в исходном месте и порядке. Не удаляй, не объединяй и не переставляй строки Assi: это точный текст синтеза.
 - Если приложено распознавание чистой дорожки клиента, используй его как основной источник точных слов и порядка реплик User. Сопоставь их с realtime-логом по порядку и контексту.
+- Если в чистой дорожке есть реальная реплика клиента, которой нет в realtime-логе, и её место понятно по порядку и контексту, обязательно вставь её как User. Это относится и к коротким ответам, благодарности и последней фразе перед завершением звонка.
+- Никогда не удаляй намерение клиента создать, перенести или отменить запись. При расхождении формулировки используй чистую дорожку клиента.
 - Реплики User исправляй только по чистой дорожке клиента, контексту разговора, сценарию и здравому смыслу.
 - В телефонном канале речь AI иногда возвращается эхом и ошибочно попадает в строку User.
 - Если строка User отсутствует в чистой дорожке клиента и похожа на шум, эхо, реплику AI, приветствие или текст сценария от лица звонящего AI, убери её. Перенеси её в Assi только если это действительно текст синтеза и такой реплики Assi ещё нет.
@@ -958,6 +960,9 @@ async function buildProcessedCallLog(rawLog, callInfo = {}) {
           callInfo.callerWavPath,
           CONFIG.postCallAudioTranscriptionTimeoutMs
       );
+      if (callInfo.callerAudioTranscriptPath) {
+        fs.writeFileSync(callInfo.callerAudioTranscriptPath, `${callerAudioTranscript}\n`, 'utf8');
+      }
       log('[POSTCALL]', `caller-only audio transcript ready; chars=${callerAudioTranscript.length}`);
     } catch (err) {
       logErr('[POSTCALL]', `caller-only audio transcription failed: ${String(err?.message || err)}`);
@@ -2077,6 +2082,7 @@ const audioServer = net.createServer((socket) => {
   let transcriptPath = null;
   let realtimeTranscriptTextPath = null;
   let processedTranscriptPath = null;
+  let callerAudioTranscriptPath = null;
   let metaPath = null;
 
   let callerWav = null;
@@ -2295,9 +2301,11 @@ const audioServer = net.createServer((socket) => {
     transcriptPath = path.join(sessionDir, 'transcript.jsonl');
     realtimeTranscriptTextPath = path.join(sessionDir, 'transcript_realtime.txt');
     processedTranscriptPath = path.join(sessionDir, 'transcript_processed.txt');
+    callerAudioTranscriptPath = path.join(sessionDir, 'transcript_caller_audio.txt');
     metaPath = path.join(sessionDir, 'meta.json');
     summary.logs.realtime = 'transcript_realtime.txt';
     summary.logs.processed = 'transcript_processed.txt';
+    summary.logs.callerAudio = 'transcript_caller_audio.txt';
 
     summary.uuid = uuidHex;
     summary.did = meta?.did || null;
@@ -2505,6 +2513,7 @@ const audioServer = net.createServer((socket) => {
       callerWavPath: sessionDir && summary.recordings.caller
           ? path.join(sessionDir, summary.recordings.caller)
           : null,
+      callerAudioTranscriptPath,
     }).then(async (processed) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');
