@@ -12,6 +12,7 @@
     "build": "npm run build --workspace @ai-secretary/api && npm run build --workspace @ai-secretary/web",
     "start": "npm run start --workspace @ai-secretary/api",
     "voice:check": "node --check server.js",
+    "voice:test": "node --test scripts/voice-transcript.test.js",
     "voice:start": "node server.js",
     "lint": "npm run lint --workspace @ai-secretary/api && npm run lint --workspace @ai-secretary/web",
     "db:migrate": "npm run db:migrate --workspace @ai-secretary/api",

@@ -11,6 +11,12 @@ const { exec } = require('child_process');
 const WebSocket = require('ws');
 
 const { SocksProxyAgent } = require('socks-proxy-agent');
+const {
+  findLikelyTranscriptionPromptLeak,
+  isLikelyAssistantEcho,
+  sanitizeRealtimeTranscript,
+  spokenTextSimilarity,
+} = require('./voice-transcript');
 
 const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
 
@@ -1716,45 +1722,6 @@ function normalizeIntentText(text) {
   return normalized;
 }
 
-function normalizeTranscriptComparison(text) {
-  return String(text || '')
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-}
-
-function spokenTextSimilarity(left, right) {
-  const normalizedLeft = normalizeTranscriptComparison(left);
-  const normalizedRight = normalizeTranscriptComparison(right);
-
-  if (!normalizedLeft || !normalizedRight) return 0;
-  if (normalizedLeft === normalizedRight) return 1;
-
-  const shorter = normalizedLeft.length <= normalizedRight.length ? normalizedLeft : normalizedRight;
-  const longer = shorter === normalizedLeft ? normalizedRight : normalizedLeft;
-  if (shorter.length >= 32 && longer.includes(shorter)) {
-    return shorter.length / longer.length;
-  }
-
-  const leftTokens = new Set(normalizedLeft.split(' ').filter((token) => token.length > 1));
-  const rightTokens = new Set(normalizedRight.split(' ').filter((token) => token.length > 1));
-  if (leftTokens.size < 4 || rightTokens.size < 4) return 0;
-
-  let intersection = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) intersection += 1;
-  }
-
-  return (2 * intersection) / (leftTokens.size + rightTokens.size);
-}
-
-function isLikelyAssistantEcho(userText, assistantText) {
-  const normalizedUser = normalizeTranscriptComparison(userText);
-  if (normalizedUser.split(' ').length < 4) return false;
-  return spokenTextSimilarity(userText, assistantText) >= 0.78;
-}
-
 const FORWARD_HUMAN_TARGETS = [
   'оператор',
   'оператора',
@@ -2159,6 +2126,14 @@ const audioServer = net.createServer((socket) => {
     return candidates.find((candidate) => isLikelyAssistantEcho(userText, candidate)) || null;
   }
 
+  function findTranscriptionPromptLeak(userText) {
+    return findLikelyTranscriptionPromptLeak(userText, [
+      clientCfg.greetingText,
+      clientCfg.instructions,
+      clientCfg.transcriptionPrompt,
+    ].filter(Boolean));
+  }
+
   function telegramTargetForCall() {
     return (
         clientCfg?.account?.telegram?.chatId ||
@@ -2260,11 +2235,23 @@ const audioServer = net.createServer((socket) => {
   function sendFinalCallLog(rawLog) {
     const realtimeLog = String(rawLog || '').trim();
     const callHeader = getCallTranscriptHeader();
-    const fallbackText = `${callHeader}\n${realtimeLog}`.trimEnd();
-    const rawStats = getRawTranscriptStats(realtimeLog);
+    const realtimeText = `${callHeader}\n${realtimeLog}`.trimEnd();
+    const sanitized = sanitizeRealtimeTranscript(realtimeLog, {
+      greetingText: clientCfg.greetingText,
+      instructions: clientCfg.instructions,
+      transcriptionPrompt: clientCfg.transcriptionPrompt,
+    });
+    const safeRealtimeLog = sanitized.text;
+    const fallbackText = `${callHeader}\n${safeRealtimeLog}`.trimEnd();
+    const rawStats = getRawTranscriptStats(safeRealtimeLog);
+
+    if (sanitized.suppressed.length > 0) {
+      summary.turns.postCallSuppressed = sanitized.suppressed.length;
+      log('[POSTCALL]', `suppressed ${sanitized.suppressed.length} transcript leak/echo turn(s)`);
+    }
 
     if (realtimeTranscriptTextPath) {
-      fs.writeFileSync(realtimeTranscriptTextPath, fallbackText + '\n', 'utf8');
+      fs.writeFileSync(realtimeTranscriptTextPath, realtimeText + '\n', 'utf8');
     }
 
     if (rawStats.userTurns === 0 || rawStats.turns < CONFIG.postCallLogMinRawTurns) {
@@ -2280,13 +2267,14 @@ const audioServer = net.createServer((socket) => {
       return;
     }
 
-    buildProcessedCallLog(realtimeLog, {
+    buildProcessedCallLog(safeRealtimeLog, {
       did: summary.did,
       callerId: summary.callerId,
       clientId: summary.clientId,
       direction: summary.direction,
       greetingText: clientCfg.greetingText,
       instructions: clientCfg.instructions,
+      transcriptionPrompt: clientCfg.transcriptionPrompt,
     }).then(async (processed) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');
@@ -2753,12 +2741,19 @@ const audioServer = net.createServer((socket) => {
           const transcript = String(evt.transcript || '').trim();
           if (transcript) {
             const echoMatch = findAssistantEchoMatch(transcript);
-            if (echoMatch) {
+            const promptLeak = findTranscriptionPromptLeak(transcript);
+            if (echoMatch || promptLeak) {
+              const reason = echoMatch ? 'assistant_echo' : 'transcription_prompt_leak';
+              const similarity = echoMatch
+                  ? spokenTextSimilarity(transcript, echoMatch)
+                  : promptLeak.similarity;
               summary.turns.echo = (summary.turns.echo || 0) + 1;
-              log('[ASR-ECHO]', `suppressed assistant echo similarity=${spokenTextSimilarity(transcript, echoMatch).toFixed(2)}`);
-              pushTranscript('assistant_echo', transcript, {
+              summary.turns[reason] = (summary.turns[reason] || 0) + 1;
+              log('[ASR-ECHO]', `suppressed ${reason} similarity=${similarity.toFixed(2)}`);
+              pushTranscript(reason, transcript, {
                 itemId: evt.item_id || null,
                 contentIndex: evt.content_index ?? null,
+                similarity,
               });
 
               if (pendingAssistantTranscript) {

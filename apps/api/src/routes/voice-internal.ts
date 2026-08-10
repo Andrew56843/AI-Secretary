@@ -24,6 +24,28 @@ import { deliverTelegramTranscript } from "../lib/telegram.js";
 const voiceInternalRouter = Router();
 const REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH = 1024;
 const STALE_OUTBOUND_QUEUE_MS = 10 * 60 * 1000;
+const TRANSCRIPTION_HINT_STOP_WORDS = new Set([
+  "ассистент",
+  "будет",
+  "говорить",
+  "должен",
+  "звонка",
+  "клиент",
+  "клиента",
+  "который",
+  "можно",
+  "нужно",
+  "ответ",
+  "ответить",
+  "после",
+  "пользователь",
+  "попросить",
+  "сказать",
+  "сценарий",
+  "только",
+  "человек",
+  "чтобы"
+]);
 
 const resolveCallSchema = z
   .object({
@@ -154,15 +176,34 @@ function clampTranscriptionPrompt(prompt: string) {
   return `${prompt.slice(0, REALTIME_TRANSCRIPTION_PROMPT_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
+function extractTranscriptionHints(value: string | null | undefined, maxItems = 36) {
+  const source = compactPromptText(value, 1600);
+  const words = source.match(/[\p{L}\p{N}][\p{L}\p{N}-]{3,}/gu) ?? [];
+  const unique = new Map<string, string>();
+
+  for (const word of words) {
+    const key = word.toLocaleLowerCase("ru-RU");
+    if (TRANSCRIPTION_HINT_STOP_WORDS.has(key) || unique.has(key)) {
+      continue;
+    }
+    unique.set(key, word);
+  }
+
+  return [...unique.values()]
+    .sort((left, right) => left.localeCompare(right, "ru"))
+    .slice(0, maxItems)
+    .join(", ");
+}
+
 function createProfileTranscriptionPrompt(profile: {
   mode: CallDirection;
   title: string;
   businessName: string | null;
   prompt: string;
 }) {
-  const scenario = compactPromptText(profile.prompt, 1600);
   const businessName = compactPromptText(profile.businessName, 160);
   const title = compactPromptText(profile.title, 160);
+  const vocabulary = extractTranscriptionHints(profile.prompt);
 
   const prompt = [
     "Русский телефонный разговор с AI-секретарём.",
@@ -171,10 +212,9 @@ function createProfileTranscriptionPrompt(profile: {
       : "Тип звонка: входящий звонок клиента AI-секретарю.",
     businessName ? `Компания или проект: ${businessName}.` : "",
     title ? `Название сценария: ${title}.` : "",
-    "Ожидаемые темы, имена, услуги, адреса, товары и формулировки бери из сценария ниже.",
     "Сохраняй короткие русские ответы как короткие ответы: да, нет, ага, алло, повтори, тот же номер.",
-    "Не заменяй слова из сценария случайными фамилиями или похожими по звучанию словами.",
-    scenario ? `Сценарий профиля: ${scenario}` : ""
+    "Не дописывай слова и фразы из контекста, если их нет в аудио.",
+    vocabulary ? `Словарь возможных терминов: ${vocabulary}.` : ""
   ]
     .filter(Boolean)
     .join("\n");
