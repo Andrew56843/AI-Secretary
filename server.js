@@ -57,6 +57,11 @@ const CONFIG = {
 
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  telegramProxyUrl:
+      process.env.TELEGRAM_PROXY_URL ||
+      process.env.OPENAI_PROXY_URL ||
+      process.env.SOCKS_PROXY_URL ||
+      '',
   telegramLinkPollingEnabled: String(process.env.TELEGRAM_LINK_POLLING_ENABLED || 'true') === 'true',
   telegramLinkPollIntervalMs: Number(process.env.TELEGRAM_LINK_POLL_INTERVAL_MS || 1000),
   telegramLinkPollTimeoutSec: Number(process.env.TELEGRAM_LINK_POLL_TIMEOUT_SEC || 25),
@@ -117,12 +122,19 @@ if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
   console.warn('[BOOT] Telegram is not configured. Call summaries will not be sent.');
 }
 
+if (CONFIG.telegramBotToken && !CONFIG.telegramProxyUrl) {
+  console.warn('[BOOT] TELEGRAM_PROXY_URL is empty. Telegram traffic will not be opened without proxy.');
+}
+
 if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) {
   console.warn('[BOOT] Platform API integration is not configured. Falling back to clients.json only.');
 }
 
 const proxyAgent = CONFIG.openAiProxyUrl
     ? new SocksProxyAgent(CONFIG.openAiProxyUrl)
+    : null;
+const telegramProxyAgent = CONFIG.telegramProxyUrl
+    ? new SocksProxyAgent(CONFIG.telegramProxyUrl)
     : null;
 
 fs.mkdirSync(CONFIG.recordsDir, { recursive: true });
@@ -155,14 +167,49 @@ function clampTranscriptionPrompt(prompt) {
   return `${text.slice(0, maxChars - 3).trimEnd()}...`;
 }
 
-async function tgFetch(method, params = {}) {
-  const url = `https://api.telegram.org/bot${CONFIG.telegramBotToken}/${method}`;
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(params),
+function tgFetch(method, params = {}) {
+  return new Promise((resolve, reject) => {
+    if (!CONFIG.telegramBotToken) {
+      reject(new Error('TELEGRAM_BOT_TOKEN is empty'));
+      return;
+    }
+    if (!telegramProxyAgent) {
+      reject(new Error('TELEGRAM_PROXY_URL is empty; refusing Telegram request without proxy'));
+      return;
+    }
+
+    const payload = JSON.stringify(params);
+    const timeoutMs = Math.max(15_000, (CONFIG.telegramLinkPollTimeoutSec + 10) * 1000);
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      path: `/bot${CONFIG.telegramBotToken}/${method}`,
+      method: 'POST',
+      agent: telegramProxyAgent,
+      timeout: timeoutMs,
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        try {
+          resolve(text ? JSON.parse(text) : {});
+        } catch {
+          reject(new Error(`Telegram returned non-JSON response: ${text.slice(0, 300)}`));
+        }
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`Telegram request timeout after ${timeoutMs}ms`));
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
   });
-  return r.json();
 }
 async function sendTelegram(text, chatId = CONFIG.telegramChatId) {
   if (!CONFIG.telegramBotToken || !chatId) return;
