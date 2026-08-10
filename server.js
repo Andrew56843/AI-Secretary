@@ -57,11 +57,7 @@ const CONFIG = {
 
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
-  telegramProxyUrl:
-      process.env.TELEGRAM_PROXY_URL ||
-      process.env.OPENAI_PROXY_URL ||
-      process.env.SOCKS_PROXY_URL ||
-      '',
+  telegramProxyUrl: process.env.TELEGRAM_PROXY_URL || '',
   telegramLinkPollingEnabled: String(process.env.TELEGRAM_LINK_POLLING_ENABLED || 'true') === 'true',
   telegramLinkPollIntervalMs: Number(process.env.TELEGRAM_LINK_POLL_INTERVAL_MS || 1000),
   telegramLinkPollTimeoutSec: Number(process.env.TELEGRAM_LINK_POLL_TIMEOUT_SEC || 25),
@@ -103,6 +99,13 @@ const CONFIG = {
   postCallLogEnabled: String(process.env.POST_CALL_LOG_ENABLED || 'true') === 'true',
   postCallLogModel: process.env.POST_CALL_LOG_MODEL || 'gpt-4o-mini',
   postCallLogTimeoutMs: Number(process.env.POST_CALL_LOG_TIMEOUT_MS || 45_000),
+  postCallAudioTranscriptionEnabled:
+      String(process.env.POST_CALL_AUDIO_TRANSCRIPTION_ENABLED || 'true') === 'true',
+  postCallAudioTranscriptionModel:
+      process.env.POST_CALL_AUDIO_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe',
+  postCallAudioTranscriptionTimeoutMs:
+      Number(process.env.POST_CALL_AUDIO_TRANSCRIPTION_TIMEOUT_MS || 90_000),
+  postCallAudioMaxBytes: Number(process.env.POST_CALL_AUDIO_MAX_BYTES || 25_000_000),
   postCallLogMaxChars: Number(process.env.POST_CALL_LOG_MAX_CHARS || 20_000),
   transcriptionPromptMaxChars: Number(process.env.TRANSCRIPTION_PROMPT_MAX_CHARS || 1024),
   postCallLogFinalizeDelayMs: Number(process.env.POST_CALL_LOG_FINALIZE_DELAY_MS || 750),
@@ -297,6 +300,108 @@ function openAiPostJson(apiPath, body, timeoutMs = 45_000) {
     req.on('error', reject);
     req.write(payload);
     req.end();
+  });
+}
+
+function multipartField(boundary, name, value) {
+  return Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+      `${value}\r\n`,
+      'utf8'
+  );
+}
+
+function openAiTranscribeWav(filePath, timeoutMs = 90_000) {
+  return new Promise((resolve, reject) => {
+    if (!CONFIG.openAiApiKey) {
+      reject(new Error('OPENAI_API_KEY is empty'));
+      return;
+    }
+    if (!proxyAgent) {
+      reject(new Error('OPENAI_PROXY_URL is empty; refusing post-call audio transcription without proxy'));
+      return;
+    }
+
+    let audio;
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size <= 44) {
+        throw new Error('caller WAV is empty');
+      }
+      if (stat.size > CONFIG.postCallAudioMaxBytes) {
+        throw new Error(`caller WAV is too large: ${stat.size} bytes`);
+      }
+      audio = fs.readFileSync(filePath);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const boundary = `----callsec-${crypto.randomBytes(12).toString('hex')}`;
+    const fileHeader = Buffer.from(
+        `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="caller.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n',
+        'utf8'
+    );
+    const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const payload = Buffer.concat([
+      multipartField(boundary, 'model', CONFIG.postCallAudioTranscriptionModel),
+      multipartField(boundary, 'language', CONFIG.defaultLanguage || 'ru'),
+      multipartField(boundary, 'response_format', 'json'),
+      fileHeader,
+      audio,
+      closing,
+    ]);
+
+    const req = https.request(
+        {
+          hostname: 'api.openai.com',
+          path: '/v1/audio/transcriptions',
+          method: 'POST',
+          agent: proxyAgent,
+          timeout: timeoutMs,
+          headers: {
+            Authorization: `Bearer ${CONFIG.openAiApiKey}`,
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'content-length': payload.length,
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => {
+            const responseText = Buffer.concat(chunks).toString('utf8');
+            let json;
+            try {
+              json = responseText ? JSON.parse(responseText) : {};
+            } catch {
+              reject(new Error(`OpenAI transcription returned non-JSON response: ${responseText.slice(0, 300)}`));
+              return;
+            }
+
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              const message = json?.error?.message || responseText.slice(0, 300) || `HTTP ${res.statusCode}`;
+              reject(new Error(`OpenAI audio transcription failed: ${message}`));
+              return;
+            }
+
+            const text = String(json?.text || '').trim();
+            if (!text) {
+              reject(new Error('OpenAI audio transcription is empty'));
+              return;
+            }
+            resolve(text);
+          });
+        }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`OpenAI audio transcription timeout after ${timeoutMs}ms`));
+    });
+    req.on('error', reject);
+    req.end(payload);
   });
 }
 
@@ -550,6 +655,10 @@ function startTelegramLinkPolling() {
     logErr('[TG]', 'link polling skipped: TELEGRAM_BOT_TOKEN is empty');
     return;
   }
+  if (!telegramProxyAgent) {
+    logErr('[TG]', 'link polling skipped: TELEGRAM_PROXY_URL is empty');
+    return;
+  }
   if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) {
     logErr('[TG]', 'link polling skipped: Platform API is not configured');
     return;
@@ -779,29 +888,34 @@ function appendJsonl(filePath, obj) {
 
 const POST_CALL_LOG_SYSTEM_PROMPT = `
 Ты редактор транскрипта телефонного разговора с AI-секретарём.
-На входе сырой realtime-лог с репликами "Assi:" и "User:".
+На входе сырой realtime-лог с репликами "Assi:" и "User:", а также может быть приложено отдельное распознавание чистой аудиодорожки клиента.
 Верни только очищенный лог в том же формате, без комментариев, без markdown.
 
 Правила:
 - Сохраняй порядок реплик.
 - Реплики Assi сохраняй дословно или почти дословно, потому что это текст синтеза.
-- Реплики User исправляй только по контексту разговора, сценарию и здравому смыслу.
+- Если приложено распознавание чистой дорожки клиента, используй его как основной источник точных слов и порядка реплик User. Сопоставь их с realtime-логом по порядку и контексту.
+- Реплики User исправляй только по чистой дорожке клиента, контексту разговора, сценарию и здравому смыслу.
 - В телефонном канале речь AI иногда возвращается эхом и ошибочно попадает в строку User.
-- Если строка User повторяет реплику AI, приветствие или текст сценария от лица звонящего AI, убери дубль либо перенеси её в Assi, если такой реплики Assi ещё нет.
+- Если строка User отсутствует в чистой дорожке клиента и похожа на шум, эхо, реплику AI, приветствие или текст сценария от лица звонящего AI, убери её. Перенеси её в Assi только если это действительно текст синтеза и такой реплики Assi ещё нет.
 - Не переноси настоящие ответы клиента в Assi только из-за делового или длинного текста.
 - Не выдумывай новые факты, услуги, адреса, имена, суммы и номера.
 - Если фразу невозможно восстановить уверенно, пиши: User: [неразборчиво]
 - Если понятно только частично, оставь понятную часть и пометь сомнение скобками: [неразборчиво].
 `.trim();
 
-function buildPostCallLogUserPrompt(rawLog, callInfo = {}) {
+function buildPostCallLogUserPrompt(rawLog, callInfo = {}, callerAudioTranscript = '') {
   const clipped = String(rawLog || '').slice(0, CONFIG.postCallLogMaxChars);
+  const callerAudio = String(callerAudioTranscript || '').slice(0, CONFIG.postCallLogMaxChars);
   return [
     `DID: ${callInfo.did || '-'}`,
     `Caller: ${callInfo.callerId || '-'}`,
     `Direction: ${callInfo.direction || '-'}`,
     `Greeting: ${String(callInfo.greetingText || '-').slice(0, 800)}`,
     `Assistant scenario: ${String(callInfo.instructions || '-').slice(0, 4000)}`,
+    '',
+    'Распознавание чистой дорожки клиента (только его речь, по порядку):',
+    callerAudio || '[недоступно]',
     '',
     'Сырой лог:',
     clipped || '[пустой лог]',
@@ -832,13 +946,26 @@ function getRawTranscriptStats(rawLog) {
 async function buildProcessedCallLog(rawLog, callInfo = {}) {
   if (!CONFIG.postCallLogEnabled) return String(rawLog || '').trim();
 
+  let callerAudioTranscript = '';
+  if (CONFIG.postCallAudioTranscriptionEnabled && callInfo.callerWavPath) {
+    try {
+      callerAudioTranscript = await openAiTranscribeWav(
+          callInfo.callerWavPath,
+          CONFIG.postCallAudioTranscriptionTimeoutMs
+      );
+      log('[POSTCALL]', `caller-only audio transcript ready; chars=${callerAudioTranscript.length}`);
+    } catch (err) {
+      logErr('[POSTCALL]', `caller-only audio transcription failed: ${String(err?.message || err)}`);
+    }
+  }
+
   const response = await openAiPostJson('/v1/chat/completions', {
     model: CONFIG.postCallLogModel,
     temperature: 0,
     max_tokens: 2400,
     messages: [
       { role: 'system', content: POST_CALL_LOG_SYSTEM_PROMPT },
-      { role: 'user', content: buildPostCallLogUserPrompt(rawLog, callInfo) },
+      { role: 'user', content: buildPostCallLogUserPrompt(rawLog, callInfo, callerAudioTranscript) },
     ],
   }, CONFIG.postCallLogTimeoutMs);
 
@@ -1640,12 +1767,13 @@ function buildCalendarToolInstruction(clientCfg) {
     'Use FIND_APPOINTMENTS when the caller wants to cancel or move an existing appointment but does not remember its exact date or time. It searches only appointments matching the caller phone.',
     'FIND_SLOTS requires rangeStartDateTime, rangeEndDateTime, and durationMinutes. Offer only slots returned by the tool.',
     'The server also enforces working hours, lunch or other breaks, and the minimum gap between customers when those rules are written in the account scenario.',
-    'For a new appointment, call FIND_SLOTS before CREATE. For a move, call FIND_SLOTS for the new period and then RESCHEDULE; do not implement a move as CANCEL plus CREATE.',
+    'For a new appointment, call FIND_SLOTS before CREATE. For a move, after identifying the existing appointment and collecting the new time, call RESCHEDULE directly. RESCHEDULE checks availability while excluding the appointment being moved. Do not call FIND_SLOTS first for a move, and never implement a move as CANCEL plus CREATE.',
     'У тебя подключён инструмент Google Calendar callsec_calendar_action.',
     `Рабочая временная зона клиента: ${timeZone}. Текущее локальное время: ${getReferenceLocalDateTime(timeZone)}.`,
     'Когда клиент хочет создать, перенести или отменить запись, сначала собери только минимально нужные данные.',
     'Для CREATE нужны услуга, дата, время, имя и подтверждение номера.',
     'Для RESCHEDULE нужны старая дата/время, новая дата/время, имя или подтверждённый номер. Не спрашивай услугу и мастера заново, если можно найти старую запись по телефону и времени.',
+    'При переносе найденной записи сразу вызывай RESCHEDULE с её старым и новым временем: этот вызов сам проверит занятость и не считает переносимую запись конфликтом.',
     'Для CANCEL нужны старая дата/время или дата, имя или подтверждённый номер.',
     'Перед словами "запись создана", "запись перенесена" или "запись отменена" обязательно вызови callsec_calendar_action и дождись результата. Без успешного результата инструмента запрещено подтверждать успех.',
     'Если клиент говорит "перенести", "перенос", "поменять время" или "сдвинуть", действие всегда RESCHEDULE, никогда CREATE.',
@@ -2369,6 +2497,9 @@ const audioServer = net.createServer((socket) => {
       greetingText: clientCfg.greetingText,
       instructions: clientCfg.instructions,
       transcriptionPrompt: clientCfg.transcriptionPrompt,
+      callerWavPath: sessionDir && summary.recordings.caller
+          ? path.join(sessionDir, summary.recordings.caller)
+          : null,
     }).then(async (processed) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');

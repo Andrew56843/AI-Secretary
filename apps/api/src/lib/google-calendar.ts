@@ -17,6 +17,7 @@ const MAX_AVAILABILITY_RANGE_DAYS = 14;
 const DEFAULT_AVAILABILITY_DURATION_MINUTES = 30;
 const DEFAULT_AVAILABILITY_LIMIT = 5;
 const AVAILABILITY_STEP_MINUTES = 15;
+const SCHEDULE_POLICY_EXTRACTION_WAIT_MS = 1_500;
 
 const openAiChatCompletionSchema = z.object({
   choices: z
@@ -289,7 +290,17 @@ async function extractSchedulePolicyFromPrompt(assistantPrompt: string | null | 
 
   const cached = schedulePolicyCache.get(prompt);
   if (cached) {
-    return cached;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        cached,
+        new Promise<CalendarSchedulePolicy>((resolve) => {
+          timer = setTimeout(() => resolve(deterministicPolicy), SCHEDULE_POLICY_EXTRACTION_WAIT_MS);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   const extraction = (async () => {
@@ -347,7 +358,17 @@ async function extractSchedulePolicyFromPrompt(assistantPrompt: string | null | 
     }
   }
   schedulePolicyCache.set(prompt, extraction);
-  return extraction;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      extraction,
+      new Promise<CalendarSchedulePolicy>((resolve) => {
+        timer = setTimeout(() => resolve(deterministicPolicy), SCHEDULE_POLICY_EXTRACTION_WAIT_MS);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function isValidDateTime(value: string | null | undefined) {
