@@ -20,13 +20,10 @@ import type {
   PhoneVerificationStatusResponse,
   PromptEditHistoryItem,
   ProfilesByMode,
-  ReservedPhoneNumber,
   TelegramIntegration,
   UiMode
 } from "../types";
 import { clearToken, clearUser } from "./session";
-
-const legacyServerApiUrl = "93.77.186.23:14000";
 
 function resolveApiUrl() {
   const configuredUrl = import.meta.env.VITE_API_URL;
@@ -38,13 +35,6 @@ function resolveApiUrl() {
   const trimmedUrl = configuredUrl.trim();
   if (!trimmedUrl) {
     return "";
-  }
-
-  if (typeof window !== "undefined") {
-    const openedOnLegacyIp = window.location.host === "93.77.186.23:18080";
-    if (!openedOnLegacyIp && trimmedUrl.includes(legacyServerApiUrl)) {
-      return "";
-    }
   }
 
   return trimmedUrl;
@@ -135,7 +125,7 @@ export function completePhoneVerification(id: string, payload: { password: strin
 }
 
 export function changePassword(token: string, password: string) {
-  return request<{ user: AuthResponse["user"] }>("/api/auth/password", {
+  return request<AuthResponse>("/api/auth/password", {
     token,
     method: "PUT",
     body: { password }
@@ -152,10 +142,6 @@ export function updateMyTimeZone(token: string, timeZone: string) {
 
 export function getMyProfiles(token: string) {
   return request<{ profiles: ProfilesByMode }>("/api/profiles/me", { token });
-}
-
-export function getFreeNumbers(token: string) {
-  return request<{ numbers: ReservedPhoneNumber[] }>("/api/profiles/numbers/free", { token });
 }
 
 export function getBilling(token: string) {
@@ -209,14 +195,6 @@ export function disconnectGoogleCalendar(token: string) {
   return request<{ google: GoogleIntegration }>("/api/integrations/google/disconnect", {
     token,
     method: "POST"
-  });
-}
-
-export function connectTelegram(token: string, payload: { username?: string; chatId?: string }) {
-  return request<{ telegram: TelegramIntegration }>("/api/integrations/telegram/connect", {
-    token,
-    method: "POST",
-    body: payload
   });
 }
 

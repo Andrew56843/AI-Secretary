@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "description": "AI secretary portfolio project",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -13,8 +16,11 @@
     "start": "npm run start --workspace @ai-secretary/api",
     "voice:check": "node --check server.js",
     "voice:test": "node --test scripts/voice-transcript.test.js",
+    "api:test": "npm run test --workspace @ai-secretary/api",
+    "test": "npm run voice:test && npm run api:test",
     "voice:start": "node server.js",
     "lint": "npm run lint --workspace @ai-secretary/api && npm run lint --workspace @ai-secretary/web",
+    "db:generate": "npm run db:generate --workspace @ai-secretary/api",
     "db:migrate": "npm run db:migrate --workspace @ai-secretary/api",
     "db:reset": "npm run db:reset --workspace @ai-secretary/api",
     "db:seed": "npm run db:seed --workspace @ai-secretary/api",
@@ -26,12 +32,16 @@
     "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f --tail=100"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.4"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-    "https-proxy-agent": "^9.0.0",
+    "https-proxy-agent": "^9.1.0",
     "socks-proxy-agent": "^10.1.0",
     "ws": "^8.21.3"
+  },
+  "overrides": {
+    "body-parser": "^2.3.0",
+    "ip-address": "^10.5.0"
   }
 }

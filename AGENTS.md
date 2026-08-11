@@ -45,7 +45,7 @@
 
 ## Product Rules
 
-- The UI is a portfolio SaaS MVP for an AI secretary, not a generic CRM.
+- Callsec is a customer-facing multi-tenant AI secretary product, not a demo or a generic CRM.
 - Keep Russian copy natural and concise.
 - In call logs, user speech should remain visually stronger than assistant speech.
 - Telegram transcripts should be sent once after call end, not as separate start/end noise.

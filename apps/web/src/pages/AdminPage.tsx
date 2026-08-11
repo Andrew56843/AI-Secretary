@@ -11,8 +11,6 @@ type AdminPageProps = {
   onLogout: () => void;
 };
 
-const ADMIN_PHONE = "+79054176285";
-
 function formatRubles(amount: number) {
   const hasKopecks = Math.abs(amount % 1) > Number.EPSILON;
 
@@ -142,7 +140,7 @@ export function AdminPage({ token, user, onAuthorized, onLogout }: AdminPageProp
     }
   }
 
-  if (user.phone !== ADMIN_PHONE) {
+  if (!user.isAdmin) {
     return (
       <main className="admin-page">
         <section className="admin-denied">

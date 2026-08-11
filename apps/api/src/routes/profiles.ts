@@ -189,16 +189,6 @@ profilesRouter.post("/prompt/apply", requireAuth, async (req, res) => {
   }
 });
 
-profilesRouter.get("/numbers/free", requireAuth, async (_req, res) => {
-  const numbers = await prisma.reservedPhoneNumber.findMany({
-    where: { assigned: false },
-    orderBy: { number: "asc" },
-    take: 50
-  });
-
-  res.json({ numbers });
-});
-
 profilesRouter.get("/me", requireAuth, async (req, res) => {
   const profiles = await prisma.assistantProfile.findMany({
     where: { userId: req.user!.userId },
@@ -263,60 +253,56 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
   const payload = parsed.data;
   const userId = req.user!.userId;
 
-  try {
-    const profile = await prisma.$transaction(
-      async (tx) => {
-        const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
-        const existing = await tx.assistantProfile.findUnique({
-          where: { userId_mode: { userId, mode } }
-        });
+  const profile = await prisma.$transaction(
+    async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+      const existing = await tx.assistantProfile.findUnique({
+        where: { userId_mode: { userId, mode } }
+      });
 
-        if (!existing) {
-          const forwardingRules = resolveForwardingRules(payload);
+      if (!existing) {
+        const forwardingRules = resolveForwardingRules(payload);
 
-          return tx.assistantProfile.create({
-            data: {
-              userId,
-              mode,
-              title: payload.title,
-              businessName: payload.businessName,
-              prompt: payload.prompt,
-              greetingText: payload.greetingText,
-              forwardingPhone: user.phone,
-              ...forwardingRules,
-              realtimeModel: payload.realtimeModel ?? "gpt-realtime-2",
-              voice: payload.voice ?? "alloy",
-              maxDialogSeconds: payload.maxDialogSeconds
-            },
-            include: includeProfileRelations()
-          });
-        }
-
-        const forwardingRules = resolveForwardingRules(payload, existing);
-
-        return tx.assistantProfile.update({
-          where: { id: existing.id },
+        return tx.assistantProfile.create({
           data: {
+            userId,
+            mode,
             title: payload.title,
             businessName: payload.businessName,
             prompt: payload.prompt,
             greetingText: payload.greetingText,
             forwardingPhone: user.phone,
             ...forwardingRules,
-            ...(payload.realtimeModel !== undefined ? { realtimeModel: payload.realtimeModel } : {}),
-            ...(payload.voice !== undefined ? { voice: payload.voice } : {}),
+            realtimeModel: payload.realtimeModel ?? "gpt-realtime-2",
+            voice: payload.voice ?? "alloy",
             maxDialogSeconds: payload.maxDialogSeconds
           },
           include: includeProfileRelations()
         });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    );
+      }
 
-    res.json({ profile });
-  } catch (error) {
-    throw error;
-  }
+      const forwardingRules = resolveForwardingRules(payload, existing);
+
+      return tx.assistantProfile.update({
+        where: { id: existing.id },
+        data: {
+          title: payload.title,
+          businessName: payload.businessName,
+          prompt: payload.prompt,
+          greetingText: payload.greetingText,
+          forwardingPhone: user.phone,
+          ...forwardingRules,
+          ...(payload.realtimeModel !== undefined ? { realtimeModel: payload.realtimeModel } : {}),
+          ...(payload.voice !== undefined ? { voice: payload.voice } : {}),
+          maxDialogSeconds: payload.maxDialogSeconds
+        },
+        include: includeProfileRelations()
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+  );
+
+  res.json({ profile });
 });
 
 export { profilesRouter };

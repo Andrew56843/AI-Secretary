@@ -1,14 +1,11 @@
-import { CallDirection, CallStatus, Prisma } from "@prisma/client";
+import { CallDirection, Prisma } from "@prisma/client";
 import { createReadStream, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
-import { createBillableCallLog } from "../lib/billable-call.js";
 import { prisma } from "../lib/prisma.js";
-import { normalizePhone } from "../lib/phone.js";
-import { deliverTelegramTranscript } from "../lib/telegram.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const callLogsRouter = Router();
@@ -31,16 +28,6 @@ const logsQuerySchema = z.object({
 
 const callLogParamsSchema = z.object({
   id: z.string().cuid()
-});
-
-const createMockSchema = z.object({
-  direction: z.enum(["inbound", "outbound"]).default("inbound"),
-  customerPhone: z.string().trim().min(8).max(24).transform(normalizePhone),
-  durationSeconds: z.number().int().nonnegative().max(3600),
-  status: z.enum([CallStatus.SUCCESS, CallStatus.ESCALATED, CallStatus.MISSED]),
-  summary: z.string().trim().min(8).max(800),
-  transcript: z.string().trim().min(8).max(12000).optional(),
-  recordingUrl: z.string().url().optional()
 });
 
 function createPagination(page: number, pageSize: number, total: number) {
@@ -74,7 +61,7 @@ function resolveRecordingPath(recordingUrl: string | null | undefined) {
   }
 
   const root = path.resolve(env.CALL_RECORDINGS_ROOT);
-  const resolved = path.resolve(recordingUrl);
+  const resolved = path.isAbsolute(recordingUrl) ? path.resolve(recordingUrl) : path.resolve(root, recordingUrl);
   const insideRoot = resolved === root || resolved.startsWith(`${root}${path.sep}`);
 
   return insideRoot ? resolved : null;
@@ -137,13 +124,34 @@ callLogsRouter.get("/me", requireAuth, async (req, res) => {
   const pagination = createPagination(parsed.data.page, pageSize, total);
   const logs = await prisma.callLog.findMany({
     where,
-    include: { transcriptDeliveries: true },
+    select: {
+      id: true,
+      direction: true,
+      customerPhone: true,
+      status: true,
+      durationSeconds: true,
+      transcript: true,
+      summary: true,
+      recordingUrl: true,
+      createdAt: true,
+      transcriptDeliveries: {
+        select: {
+          id: true,
+          channel: true,
+          status: true,
+          createdAt: true
+        }
+      }
+    },
     orderBy: { createdAt: "desc" },
     skip: (pagination.page - 1) * pageSize,
     take: pageSize
   });
 
-  res.json({ logs, pagination });
+  res.json({
+    logs: logs.map(({ recordingUrl, ...log }) => ({ ...log, hasRecording: Boolean(recordingUrl) })),
+    pagination
+  });
 });
 
 callLogsRouter.get("/me/active", requireAuth, async (req, res) => {
@@ -219,57 +227,6 @@ callLogsRouter.get("/:id/recording", requireAuth, async (req, res) => {
     createReadStream(recordingPath).pipe(res);
   } catch {
     res.status(404).json({ message: "Recording not found" });
-  }
-});
-
-callLogsRouter.post("/mock", requireAuth, async (req, res) => {
-  const parsed = createMockSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
-    return;
-  }
-
-  const direction = parsed.data.direction === "inbound" ? CallDirection.INBOUND : CallDirection.OUTBOUND;
-  const profile = await prisma.assistantProfile.findUnique({
-    where: { userId_mode: { userId: req.user!.userId, mode: direction } },
-    select: { id: true }
-  });
-
-  if (!profile) {
-    res.status(404).json({ message: "Create assistant profile first" });
-    return;
-  }
-
-  const { direction: _direction, ...payload } = parsed.data;
-
-  try {
-    const log = await prisma.$transaction(
-      (tx) =>
-        createBillableCallLog(tx, {
-          userId: req.user!.userId,
-          direction,
-          ...payload
-        }),
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    );
-
-    const deliveredLog = await deliverTelegramTranscript(log.id);
-
-    res.status(201).json({ log: deliveredLog ?? log });
-  } catch (error) {
-    if (error instanceof Error && error.message === "INSUFFICIENT_MINUTES") {
-      res.status(402).json({ message: "Not enough minutes. Top up balance to continue calls." });
-      return;
-    }
-    if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
-      res.status(402).json({ message: "Not enough balance. Top up balance to continue calls." });
-      return;
-    }
-    if (error instanceof Error && error.message === "PROFILE_NOT_FOUND") {
-      res.status(404).json({ message: "Create assistant profile first" });
-      return;
-    }
-    throw error;
   }
 });
 

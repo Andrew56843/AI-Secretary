@@ -7,6 +7,7 @@ import {
 } from "../lib/account-provisioning.js";
 import { comparePassword, createToken, hashPassword } from "../lib/auth.js";
 import { isValidPhone, normalizePhone } from "../lib/phone.js";
+import { publicUser } from "../lib/public-user.js";
 import {
   getFreshPhoneVerificationRequest,
   publicPhoneVerificationRequest,
@@ -14,6 +15,7 @@ import {
 } from "../lib/phone-verification.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
+import { createRateLimit } from "../middleware/rate-limit.js";
 
 const authRouter = Router();
 
@@ -65,17 +67,38 @@ const verificationParamsSchema = z.object({
   id: z.string().trim().min(1).max(80)
 });
 
-function publicUser(user: { id: string; phone: string; fullName: string | null; timeZone?: string | null; createdAt?: Date }) {
-  return {
-    id: user.id,
-    phone: user.phone,
-    fullName: user.fullName,
-    timeZone: user.timeZone ?? "Europe/Moscow",
-    createdAt: user.createdAt
-  };
+function phoneRateLimitKey(req: { ip?: string; socket: { remoteAddress?: string }; body?: { phone?: unknown } }) {
+  const remote = req.ip || req.socket.remoteAddress || "unknown";
+  const phone = typeof req.body?.phone === "string" ? normalizePhone(req.body.phone) : "unknown";
+  return `${remote}:${phone || "invalid"}`;
 }
 
-authRouter.post("/register", async (req, res) => {
+const loginRateLimit = createRateLimit({
+  name: "auth-login",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: phoneRateLimitKey
+});
+const loginPhoneRateLimit = createRateLimit({
+  name: "auth-login-phone",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: (req) => typeof req.body?.phone === "string" ? normalizePhone(req.body.phone) || "invalid" : "invalid"
+});
+const verificationStartRateLimit = createRateLimit({
+  name: "auth-verification-start",
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  key: phoneRateLimitKey
+});
+const verificationCompleteRateLimit = createRateLimit({
+  name: "auth-verification-complete",
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: (req) => `${req.ip || req.socket.remoteAddress || "unknown"}:${req.params.id || "unknown"}`
+});
+
+authRouter.post("/register", verificationStartRateLimit, async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
@@ -101,7 +124,7 @@ authRouter.post("/register", async (req, res) => {
   });
 });
 
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", loginRateLimit, loginPhoneRateLimit, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
@@ -123,7 +146,7 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
 
-  const token = createToken({ userId: user.id, phone: user.phone });
+  const token = createToken({ userId: user.id, phone: user.phone, authVersion: user.authVersion });
 
   res.json({
     token,
@@ -131,7 +154,7 @@ authRouter.post("/login", async (req, res) => {
   });
 });
 
-authRouter.post("/forgot-password", async (req, res) => {
+authRouter.post("/forgot-password", verificationStartRateLimit, async (req, res) => {
   const parsed = z.object({ phone: phoneSchema }).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
@@ -172,7 +195,7 @@ authRouter.get("/phone-verification/:id", async (req, res) => {
   res.json({ verification });
 });
 
-authRouter.post("/phone-verification/:id/complete", async (req, res) => {
+authRouter.post("/phone-verification/:id/complete", verificationCompleteRateLimit, async (req, res) => {
   const parsedParams = verificationParamsSchema.safeParse(req.params);
   if (!parsedParams.success) {
     res.status(400).json({ message: "Invalid verification id", errors: parsedParams.error.flatten() });
@@ -237,6 +260,7 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
             phone: string;
             fullName: string | null;
             timeZone: string | null;
+            authVersion: number;
             createdAt: Date;
           }
         | null = null;
@@ -270,15 +294,14 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
             phone: request.phone,
             fullName: request.fullName,
             password: passwordHash,
-            rubleBalance: 0,
-            rubleBalanceKopecks: 0,
-            minuteBalanceSeconds: 0
+            rubleBalanceKopecks: 0
           },
           select: {
             id: true,
             phone: true,
             fullName: true,
             timeZone: true,
+            authVersion: true,
             createdAt: true
           }
         });
@@ -293,6 +316,7 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
             phone: true,
             fullName: true,
             timeZone: true,
+            authVersion: true,
             createdAt: true
           }
         });
@@ -317,12 +341,13 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
 
         user = await tx.user.update({
           where: { id: user.id },
-          data: { password: passwordHash },
+          data: { password: passwordHash, authVersion: { increment: 1 } },
           select: {
             id: true,
             phone: true,
             fullName: true,
             timeZone: true,
+            authVersion: true,
             createdAt: true
           }
         });
@@ -354,7 +379,11 @@ authRouter.post("/phone-verification/:id/complete", async (req, res) => {
   }
 
   res.json({
-    token: createToken({ userId: result.user.id, phone: result.user.phone }),
+    token: createToken({
+      userId: result.user.id,
+      phone: result.user.phone,
+      authVersion: result.user.authVersion
+    }),
     user: publicUser(result.user),
     verification: result.verification,
     delivery: {
@@ -373,10 +402,16 @@ authRouter.put("/password", requireAuth, async (req, res) => {
 
   const user = await prisma.user.update({
     where: { id: req.user!.userId },
-    data: { password: await hashPassword(parsed.data.password) }
+    data: {
+      password: await hashPassword(parsed.data.password),
+      authVersion: { increment: 1 }
+    }
   });
 
-  res.json({ user: publicUser(user) });
+  res.json({
+    token: createToken({ userId: user.id, phone: user.phone, authVersion: user.authVersion }),
+    user: publicUser(user)
+  });
 });
 
 authRouter.put("/timezone", requireAuth, async (req, res) => {

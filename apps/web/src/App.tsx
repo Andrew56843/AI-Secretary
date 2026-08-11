@@ -9,8 +9,6 @@ import { LandingPage } from "./pages/LandingPage";
 import { LegalPage } from "./pages/LegalPage";
 import type { AuthResponse, AuthUser } from "./types";
 
-const ADMIN_PHONE = "+79054176285";
-
 export default function App() {
   const [token, setTokenState] = useState<string | null>(() => {
     const storedUser = getUser<AuthUser>();
@@ -61,7 +59,7 @@ export default function App() {
           path="/dashboard"
           element={
             token && user ? (
-              <DashboardPage token={token} user={user} onLogout={handleLogout} />
+              <DashboardPage token={token} user={user} onAuthorized={handleAuthorized} onLogout={handleLogout} />
             ) : (
               <Navigate to="/auth" replace />
             )
@@ -71,7 +69,7 @@ export default function App() {
           path="/admin"
           element={
             token && user ? (
-              user.phone === ADMIN_PHONE ? (
+              user.isAdmin ? (
                 <AdminPage token={token} user={user} onAuthorized={handleAuthorized} onLogout={handleLogout} />
               ) : (
                 <Navigate to="/dashboard" replace />

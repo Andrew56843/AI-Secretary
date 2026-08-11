@@ -20,7 +20,7 @@ services:
       - "15432:5432"
 
   api:
-    image: node:20-alpine
+    image: node:24-alpine
     container_name: ai-secretary-dev-api
     working_dir: /app
     restart: unless-stopped
@@ -31,13 +31,21 @@ services:
       NODE_ENV: development
       PORT: 4000
       DATABASE_URL: postgresql://postgres:postgres@db:5432/ai_secretary?schema=public
-      JWT_SECRET: change-me-in-development-secret
+      JWT_SECRET: change-me-in-development-secret-at-least-32-characters
+      DATA_ENCRYPTION_KEY: change-me-in-development-data-key-at-least-32-characters
       CORS_ORIGIN: http://localhost:5173
+      PUBLIC_WEB_URL: http://localhost:5173
+      ADMIN_PHONES: ${ADMIN_PHONES:-+79054176285}
+      TRUST_PROXY_HOPS: 0
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       VOICE_SERVICE_TOKEN: local-voice-service-token-change-me
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_PROXY_URL: ${OPENAI_PROXY_URL:-}
       SOCKS_PROXY_URL: ${SOCKS_PROXY_URL:-}
+      CLOUDPAYMENTS_PUBLIC_ID: ${CLOUDPAYMENTS_PUBLIC_ID:-}
+      CLOUDPAYMENTS_API_SECRET: ${CLOUDPAYMENTS_API_SECRET:-}
+      CLOUDPAYMENTS_OFFER_URL: ${CLOUDPAYMENTS_OFFER_URL:-http://localhost:5173/terms}
       PROMPT_EDITOR_MODEL: ${PROMPT_EDITOR_MODEL:-gpt-4o-mini}
       CALL_RECORDINGS_ROOT: ${CALL_RECORDINGS_ROOT:-/home/andrew/ai/records}
       PHONE_VERIFICATION_CALL_NUMBER: ${PHONE_VERIFICATION_CALL_NUMBER:-+79952225212}
@@ -57,7 +65,7 @@ services:
       - "14000:4000"
 
   web:
-    image: node:20-alpine
+    image: node:24-alpine
     container_name: ai-secretary-dev-web
     working_dir: /app
     restart: unless-stopped

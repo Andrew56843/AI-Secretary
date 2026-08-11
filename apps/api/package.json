@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "tsc --noEmit",
+    "test": "tsx --test src/lib/*.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
@@ -20,11 +21,11 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "express": "^5.1.0",
-    "https-proxy-agent": "^9.0.0",
+    "express": "^5.2.1",
+    "https-proxy-agent": "^9.1.0",
     "jsonwebtoken": "^9.0.2",
     "prisma": "^6.19.3",
-    "socks-proxy-agent": "^10.0.0",
+    "socks-proxy-agent": "^10.1.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {

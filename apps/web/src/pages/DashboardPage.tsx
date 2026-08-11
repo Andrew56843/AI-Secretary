@@ -29,6 +29,7 @@ import {
 import type {
   AssistantProfile,
   ActiveCall,
+  AuthResponse,
   AuthUser,
   BillingPagination,
   BillingState,
@@ -50,6 +51,7 @@ import type {
 type DashboardProps = {
   token: string;
   user: AuthUser;
+  onAuthorized: (payload: AuthResponse) => void;
   onLogout: () => void;
 };
 
@@ -532,18 +534,6 @@ function getModelRateForMode(option: RealtimeModelOption, mode: UiMode) {
   return mode === "inbound" ? option.inboundRateRubPerMinute : option.outboundRateRubPerMinute;
 }
 
-function formatSeconds(seconds: number) {
-  const absoluteSeconds = Math.abs(seconds);
-  const minutes = Math.floor(absoluteSeconds / 60);
-  const restSeconds = absoluteSeconds % 60;
-
-  if (minutes === 0) {
-    return `${restSeconds} сек`;
-  }
-
-  return restSeconds === 0 ? `${minutes} мин` : `${minutes} мин ${restSeconds} сек`;
-}
-
 function formatLiveDuration(startedAt: string, nowMs: number) {
   const totalSeconds = Math.max(0, Math.floor((nowMs - new Date(startedAt).getTime()) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -591,16 +581,15 @@ function formatBillingTitle(transaction: BillingTransaction) {
     return "Корректировка баланса";
   }
 
+  if (transaction.type === "PAYMENT_REFUND") {
+    return "Возврат платежа";
+  }
+
   return "Стартовый лимит";
 }
 
 function formatBillingMeta(transaction: BillingTransaction) {
-  const date = new Date(transaction.createdAt).toLocaleString();
-  if (transaction.amountSeconds > 0) {
-    return `${date} · ${formatSeconds(transaction.amountSeconds)}`;
-  }
-
-  return date;
+  return new Date(transaction.createdAt).toLocaleString();
 }
 
 function contactMapFromList(contacts: PhoneContactName[]) {
@@ -673,7 +662,7 @@ function CallRecordingPlayer({ token, logId }: { token: string; logId: string })
   return <audio controls preload="metadata" src={audioUrl} />;
 }
 
-export function DashboardPage({ token, user, onLogout }: DashboardProps) {
+export function DashboardPage({ token, user, onAuthorized, onLogout }: DashboardProps) {
   const [activeMode, setActiveMode] = useState<UiMode>("inbound");
   const [profiles, setProfiles] = useState<ProfilesByMode>({ inbound: null, outbound: null });
   const [billing, setBilling] = useState<BillingState | null>(null);
@@ -695,7 +684,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
   const [stats, setStats] = useState<OutboundStats>(DEFAULT_STATS);
   const [outboundPagination, setOutboundPagination] = useState<OutboundPagination>(DEFAULT_OUTBOUND_PAGINATION);
   const [outboundPageLoading, setOutboundPageLoading] = useState(false);
-  const [rawNumbers, setRawNumbers] = useState("+79160001122, +79261230044 +79031234567");
+  const [rawNumbers, setRawNumbers] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [topUpModalOpen, setTopUpModalOpen] = useState(false);
   const [accessModalOpen, setAccessModalOpen] = useState(false);
@@ -1052,7 +1041,7 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
         return;
       }
 
-      setNotice("Баланс пополнен");
+      setError("Платёжная ссылка не получена. Попробуйте ещё раз.");
     } catch (topUpError) {
       setError(topUpError instanceof Error ? topUpError.message : "Не удалось пополнить баланс");
     } finally {
@@ -1201,7 +1190,8 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
     setNotice(null);
 
     try {
-      await changePassword(token, newPassword);
+      const response = await changePassword(token, newPassword);
+      onAuthorized(response);
       setNewPassword("");
       setAccessModalOpen(false);
       setNotice("Код пароль входа обновлен");
@@ -1921,11 +1911,11 @@ export function DashboardPage({ token, user, onLogout }: DashboardProps) {
                 </div>
                 <p>{log.summary ?? "Без краткого описания"}</p>
                 {telegramDelivery && (
-                  <span className={`delivery ${telegramDelivery.status.toLowerCase()}`} title={telegramDelivery.payloadPreview ?? undefined}>
+                  <span className={`delivery ${telegramDelivery.status.toLowerCase()}`}>
                     Telegram: {formatDeliveryStatus(telegramDelivery.status)}
                   </span>
                 )}
-                {log.recordingUrl && <CallRecordingPlayer token={token} logId={log.id} />}
+                {log.hasRecording && <CallRecordingPlayer token={token} logId={log.id} />}
                 {log.transcript && renderTranscript(log.transcript)}
                 <div className="log-row meta">
                   <span>{new Date(log.createdAt).toLocaleString()}</span>

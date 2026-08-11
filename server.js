@@ -31,7 +31,7 @@ const CONFIG = {
   metadataHost: process.env.METADATA_HOST || '127.0.0.1',
   forceBargeInPcmThreshold: Number(process.env.FORCE_BARGE_IN_PCM_THRESHOLD || 300),
   metadataPort: Number(process.env.METADATA_PORT || 9020),
-  metadataToken: process.env.METADATA_TOKEN || 'change-me',
+  metadataToken: process.env.METADATA_TOKEN || '',
   platformApiBaseUrl: process.env.PLATFORM_API_BASE_URL || '',
   voiceServiceToken: process.env.VOICE_SERVICE_TOKEN || '',
   platformApiTimeoutMs: Number(process.env.PLATFORM_API_TIMEOUT_MS || 1500),
@@ -65,8 +65,6 @@ const CONFIG = {
 
   autoGreeting: String(process.env.AUTO_GREETING || 'true') === 'true',
   recordsDir: process.env.RECORDS_DIR || path.join(process.cwd(), 'records'),
-  clientsConfigPath: process.env.CLIENTS_CONFIG_PATH || path.join(process.cwd(), 'clients.json'),
-
   keepMetadataMs: Number(process.env.KEEP_METADATA_MS || 30 * 60 * 1000),
   maxResponseOutputTokens: Number(process.env.MAX_RESPONSE_OUTPUT_TOKENS || 600),
 
@@ -130,8 +128,18 @@ if (CONFIG.telegramBotToken && !CONFIG.telegramProxyUrl) {
   console.warn('[BOOT] TELEGRAM_PROXY_URL is empty. Telegram traffic will not be opened without proxy.');
 }
 
-if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) {
-  console.warn('[BOOT] Platform API integration is not configured. Falling back to clients.json only.');
+const bootErrors = [];
+if (!CONFIG.metadataToken || /change-me|replace-with/i.test(CONFIG.metadataToken)) {
+  bootErrors.push('METADATA_TOKEN must be configured with a non-example value');
+}
+if (!CONFIG.platformApiBaseUrl) {
+  bootErrors.push('PLATFORM_API_BASE_URL is required');
+}
+if (!CONFIG.voiceServiceToken) {
+  bootErrors.push('VOICE_SERVICE_TOKEN is required');
+}
+if (bootErrors.length > 0) {
+  throw new Error(`[BOOT] Unsafe voice service configuration: ${bootErrors.join('; ')}`);
 }
 
 function createProxyAgent(proxyUrl) {
@@ -1030,58 +1038,15 @@ function isAssistantFinalText(text) {
     '\u0431\u0443\u0434\u0443 \u043d\u0430 \u0441\u0432\u044f\u0437\u0438',
     '\u043e\u0436\u0438\u0434\u0430\u0439\u0442\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u044f',
     '\u0435\u0441\u043b\u0438 \u0447\u0442\u043e \u0438\u0437\u043c\u0435\u043d\u0438\u0442\u0441\u044f',
+    '\u0441\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u0437\u0432\u043e\u043d\u043e\u043a',
+    '\u0441\u043f\u0430\u0441\u0438\u0431\u043e \u0447\u0442\u043e \u043e\u0431\u0440\u0430\u0442\u0438\u043b\u0438\u0441\u044c',
   ];
 
   if (closingPhrases.some((phrase) => normalized.includes(phrase))) {
     return true;
   }
 
-  const actionFailed = [
-    '\u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c',
-    '\u043d\u0435 \u043f\u043e\u043b\u0443\u0447\u0438\u043b\u043e\u0441\u044c',
-    '\u043d\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d',
-    '\u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d',
-    '\u043d\u0435 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d',
-    '\u043d\u0435 \u043f\u0440\u0438\u043d\u044f\u0442',
-    '\u043d\u0435 \u0433\u043e\u0442\u043e\u0432',
-    '\u043d\u0435 \u043e\u0442\u043c\u0435\u043d',
-    '\u043d\u0435 \u043f\u0435\u0440\u0435\u043d\u0435\u0441',
-  ].some((phrase) => normalized.includes(phrase));
-
-  if (actionFailed) {
-    return false;
-  }
-
-  const mentionsOrder = normalized.includes('\u0437\u0430\u043a\u0430\u0437');
-  const orderDone =
-      normalized.includes('\u043f\u0440\u0438\u043d\u044f\u0442') ||
-      normalized.includes('\u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d') ||
-      normalized.includes('\u0433\u043e\u0442\u043e\u0432');
-
-  const mentionsAppointment =
-      normalized.includes('\u0437\u0430\u043f\u0438\u0441') ||
-      normalized.includes('\u0441\u0442\u0440\u0438\u0436') ||
-      normalized.includes('\u0443\u0441\u043b\u0443\u0433');
-  const appointmentDone = [
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u0441\u0434\u0435\u043b\u0430\u043d\u0430',
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u043d\u0430',
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u0430',
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0430',
-    '\u0432\u044b \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u044b',
-    '\u0437\u0430\u043f\u0438\u0441\u0430\u043b \u0432\u0430\u0441',
-    '\u0437\u0430\u043f\u0438\u0441\u0430\u043b\u0430 \u0432\u0430\u0441',
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u0430',
-    '\u043e\u0442\u043c\u0435\u043d\u0438\u043b \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u043e\u0442\u043c\u0435\u043d\u0438\u043b\u0430 \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u043e\u0442\u043c\u0435\u043d\u0438\u043b\u0438 \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u0437\u0430\u043f\u0438\u0441\u044c \u043f\u0435\u0440\u0435\u043d\u0435\u0441\u0435\u043d\u0430',
-    '\u043f\u0435\u0440\u0435\u043d\u0435\u0441 \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u043f\u0435\u0440\u0435\u043d\u0435\u0441\u043b\u0430 \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u043f\u0435\u0440\u0435\u043d\u0435\u0441\u043b\u0438 \u0437\u0430\u043f\u0438\u0441\u044c',
-    '\u043f\u0435\u0440\u0435\u043d\u043e\u0441 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d',
-  ].some((phrase) => normalized.includes(phrase));
-
-  return (mentionsOrder && orderDone) || (mentionsAppointment && appointmentDone);
+  return false;
 }
 
 function meanAbsPcm16(buf) {
@@ -1175,12 +1140,9 @@ function createDownsampler24kTo8k() {
   };
 }
 
-// ---------- Clients config ----------
+// ---------- Voice profile config ----------
 
-let clientsConfigCache = null;
-let clientsConfigMtimeMs = 0;
-
-function defaultClientConfig() {
+function baseVoiceConfig() {
   return {
     clientId: 'default',
     clientName: 'Default',
@@ -1207,52 +1169,16 @@ function defaultClientConfig() {
   };
 }
 
-function loadClientsConfig() {
-  try {
-    const stat = fs.statSync(CONFIG.clientsConfigPath);
-    if (clientsConfigCache && stat.mtimeMs === clientsConfigMtimeMs) {
-      return clientsConfigCache;
-    }
-
-    const parsed = JSON.parse(fs.readFileSync(CONFIG.clientsConfigPath, 'utf8'));
-    clientsConfigCache = parsed;
-    clientsConfigMtimeMs = stat.mtimeMs;
-    log('[CFG]', `loaded ${path.basename(CONFIG.clientsConfigPath)}`);
-    return clientsConfigCache;
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      logErr('[CFG]', `failed to load ${CONFIG.clientsConfigPath}: ${err.message}`);
-    }
-    clientsConfigCache = null;
-    clientsConfigMtimeMs = 0;
-    return null;
-  }
-}
-
 function resolveClientConfig(meta) {
-  const base = defaultClientConfig();
-  const cfg = loadClientsConfig();
-  if (!cfg) return base;
-
-  const defaults = cfg.defaults || {};
-  const didMap = cfg.didMap || {};
-  const clientMap = cfg.clientMap || {};
-
-  const byDid = meta?.did ? didMap[String(meta.did)] || null : null;
-  const byClientId = meta?.clientId ? clientMap[String(meta.clientId)] || null : null;
   const byPlatform = meta?.platformProfile || null;
+  if (!byPlatform) return null;
+  const base = baseVoiceConfig();
 
   return {
     ...base,
-    ...defaults,
-    ...byDid,
-    ...byClientId,
     ...byPlatform,
     turnDetection: {
       ...base.turnDetection,
-      ...(defaults.turnDetection || {}),
-      ...(byDid?.turnDetection || {}),
-      ...(byClientId?.turnDetection || {}),
       ...(byPlatform?.turnDetection || {}),
     },
   };
@@ -1705,15 +1631,14 @@ const SECRETARY_RUNTIME_INSTRUCTIONS = `
 - Не диктуй номер телефона клиента по цифрам без прямой просьбы. Для подтверждения номера спрашивай: "Подтверждаете номер, с которого звоните?"
 - Если клиент сам просит продиктовать номер, произнеси все цифры полностью и в конце добавь "верно?".
 - Если разговор зашёл в тупик или клиент явно просит человека, используй доступные правила переадресации.
+- Сценарий клиента является единственным источником его услуг, товаров, цен, расписания, ограничений и желаемого результата разговора.
+- Не переноси правила, термины или факты из других компаний и предыдущих разговоров.
+- Не утверждай, что внешнее действие выполнено, если его не подтвердил доступный инструмент или сам сценарий не требует только зафиксировать заявку.
 - Не говори от женского лица, если выбран мужской или нейтральный голос. Не используй женские формы вроде "готова", "записала", "передала", "администраторша", если профиль явно не требует женский голос и женскую роль.
 - Если пол роли не задан явно, говори нейтрально: "могу помочь", "запись сделана", "уточню". Не называй себя девушкой, женщиной, администраторшей или мастерицей.
 - Телефонный эконом-режим: каждый ответ максимум одно короткое предложение до 12 слов, кроме финального итога.
 - Не произноси фразы-заполнители: "давайте аккуратно", "сейчас подумаю", "важный момент", "секунду", "сейчас уточню", если можно сразу спросить или ответить.
-- При записи спрашивай только недостающий обязательный факт: услугу, дату, время, имя или подтверждение номера.
-- При переносе записи не выясняй услугу и мастера заново, если уже известны старая дата/время, новая дата/время и имя или номер клиента.
-- Если клиент просит создать, перенести или отменить запись, собери минимально нужные данные, затем действуй как полноценный секретарь: подтверждай итог клиенту без фраз "передам владельцу", "ожидайте подтверждения", "запрос на подтверждение".
-- Не отправляй владельцу для подтверждения обычные записи, переносы и отмены, если в сценарии есть расписание или подключён календарь. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или нестандартной ситуации вне сценария.
-- По завершении записи, переноса или отмены скажи один короткий итог и заверши разговор фразой: "Запись сделана", "Запись отменена", "Запись перенесена" или "Ждём вас".
+- Когда цель сценария выполнена и ответ клиента больше не нужен, коротко сообщи итог и закончи явной прощальной фразой.
 `.trim();
 
 const MASCULINE_OR_NEUTRAL_VOICES = new Set(['alloy', 'ash', 'ballad', 'echo', 'sage', 'verse', 'cedar']);
@@ -1768,9 +1693,8 @@ function buildCalendarToolInstruction(clientCfg) {
     return [
       'Внутреннее правило: Google Calendar у этого аккаунта не подключён, инструмента календаря нет.',
       'Не говори клиенту про отсутствие Google Calendar и не пытайся проверять свободные слоты во внешней системе.',
-      'Если по сценарию хватает данных для записи, переноса или отмены, коротко подтверди: "запись сделана", "запись перенесена" или "запись отменена".',
-      'В этом режиме ты консультируешь клиента и фиксируешь итог в разговоре; транскрипт и запись звонка сохранятся автоматически.',
-      'Не выдумывай занятость времени. Если сценарий не даёт расписания или данных не хватает, задай один короткий уточняющий вопрос.',
+      'Следуй сценарию аккаунта. Не заявляй, что запись во внешнем календаре создана, перенесена или отменена.',
+      'Если сценарий требует только принять и зафиксировать заявку, собери нужные данные и честно подтверди именно приём заявки.',
     ].join(' ');
   }
 
@@ -1784,6 +1708,7 @@ function buildCalendarToolInstruction(clientCfg) {
     'У тебя подключён инструмент Google Calendar callsec_calendar_action.',
     `Рабочая временная зона клиента: ${timeZone}. Текущее локальное время: ${getReferenceLocalDateTime(timeZone)}.`,
     'Когда клиент хочет создать, перенести или отменить запись, сначала собери только минимально нужные данные.',
+    'Не отправляй владельцу для подтверждения обычные записи, переносы и отмены. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или ситуации вне сценария.',
     'Для CREATE нужны услуга, дата, время, имя и подтверждение номера.',
     'Для RESCHEDULE нужны старая дата/время, новая дата/время, имя или подтверждённый номер. Не спрашивай услугу и мастера заново, если можно найти старую запись по телефону и времени.',
     'При переносе найденной записи сразу вызывай RESCHEDULE с её старым и новым временем: этот вызов сам проверит занятость и не считает переносимую запись конфликтом.',
@@ -2080,7 +2005,7 @@ const audioServer = net.createServer((socket) => {
   let totalTextSpeech = "";
 
   let meta = null;
-  let clientCfg = defaultClientConfig();
+  let clientCfg = baseVoiceConfig();
   let sessionDir = null;
   let transcriptPath = null;
   let realtimeTranscriptTextPath = null;
@@ -2894,7 +2819,6 @@ const audioServer = net.createServer((socket) => {
       logErr('[OA]', 'OPENAI_PROXY_URL is empty; refusing to open Realtime without proxy');
       return;
     }
-    //todo: если невозможно установить соединение
     const realtimeModel = clientCfg.realtimeModel || CONFIG.realtimeModel;
     ws = new WebSocket(
         `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(realtimeModel)}`,
@@ -3206,7 +3130,19 @@ const audioServer = net.createServer((socket) => {
       if (type === TYPE_UUID) {
         uuidHex = normalizeUuid(payload.toString('hex'));
         meta = getCallMeta(uuidHex);
-        clientCfg = resolveClientConfig(meta);
+        const resolvedClientCfg = resolveClientConfig(meta);
+        if (!resolvedClientCfg) {
+          summary.uuid = uuidHex;
+          summary.did = meta?.did || null;
+          summary.callerId = meta?.callerId || null;
+          summary.clientId = meta?.clientId || null;
+          summary.direction = meta?.direction || 'INBOUND';
+          summary.closeReason = 'profile_unavailable';
+          logErr('[CALL]', `rejecting uuid=${uuidHex}: platform profile is unavailable`);
+          requestCallHangup('profile_unavailable');
+          continue;
+        }
+        clientCfg = resolvedClientCfg;
 
         if (getPlatformAction() === 'HANGUP') {
           summary.uuid = uuidHex;
@@ -3236,8 +3172,6 @@ const audioServer = net.createServer((socket) => {
         log('[UUID]', uuidHex);
         if (meta) {
           log('[META]', `did=${meta.did || '-'} callerId=${meta.callerId || '-'} clientId=${meta.clientId || '-'}`);
-        } else {
-          log('[META]', 'not found for uuid; using default client config');
         }
 
         persistMeta();

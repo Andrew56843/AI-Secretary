@@ -1,7 +1,8 @@
-import { BillingTransactionType, CallDirection, Prisma } from "@prisma/client";
+import { BillingTransactionType, CallDirection, PaymentOrderStatus, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
-import { billingAmountRub, kopecksToRubles, rublesToKopecks } from "../lib/money.js";
+import { createCloudPaymentsOrder, isCloudPaymentsConfigured } from "../lib/cloudpayments.js";
+import { kopecksToRubles, rublesToKopecks } from "../lib/money.js";
 import {
   canRenewNumber,
   getNumberRentDaysLeft,
@@ -17,9 +18,9 @@ const BILLING_HISTORY_TYPES = [
   BillingTransactionType.CALL_CHARGE,
   BillingTransactionType.NUMBER_PURCHASE,
   BillingTransactionType.ADMIN_ADJUSTMENT,
-  BillingTransactionType.TOP_UP
+  BillingTransactionType.TOP_UP,
+  BillingTransactionType.PAYMENT_REFUND
 ];
-const CLOUDTIPS_PAYMENT_URL = "https://pay.cloudtips.ru/p/73767f54";
 
 const topUpSchema = z.object({
   amountRub: z.number().int().min(100).max(500000)
@@ -44,23 +45,14 @@ function createPagination(page: number, pageSize: number, total: number) {
   };
 }
 
-function createCloudTipsPaymentUrl(amountRub: number, userId: string) {
-  const paymentUrl = new URL(CLOUDTIPS_PAYMENT_URL);
-  paymentUrl.searchParams.set("amount", String(amountRub));
-  paymentUrl.searchParams.set("hideamount", "true");
-  paymentUrl.searchParams.set("userid", userId);
-  return paymentUrl.toString();
-}
-
 type BillingTransactionWithMoney = {
-  amountRub: number | null;
   amountKopecks: number;
 };
 
 function serializeBillingTransaction<T extends BillingTransactionWithMoney>(transaction: T) {
   return {
     ...transaction,
-    amountRub: billingAmountRub(transaction.amountRub, transaction.amountKopecks)
+    amountRub: kopecksToRubles(transaction.amountKopecks)
   };
 }
 
@@ -69,8 +61,6 @@ async function getBillingState(userId: string) {
     prisma.user.findUniqueOrThrow({
       where: { id: userId },
       select: {
-        minuteBalanceSeconds: true,
-        totalPurchasedSeconds: true,
         numberPurchasedAt: true,
         numberRentExpiresAt: true
       }
@@ -92,8 +82,6 @@ async function getBillingState(userId: string) {
 
   return {
     rubleBalance: kopecksToRubles(ledgerBalance._sum.amountKopecks ?? 0),
-    minuteBalanceSeconds: user.minuteBalanceSeconds,
-    totalPurchasedSeconds: user.totalPurchasedSeconds,
     numberPurchasedAt: user.numberPurchasedAt,
     numberRentExpiresAt: user.numberRentExpiresAt,
     numberRentalPriceRub: NUMBER_RENT_PRICE_RUB,
@@ -142,12 +130,43 @@ billingRouter.post("/top-up", requireAuth, async (req, res) => {
   }
 
   const amountRub = parsed.data.amountRub;
+  if (!isCloudPaymentsConfigured()) {
+    res.status(503).json({ message: "Online payments are temporarily unavailable" });
+    return;
+  }
+
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: req.user!.userId },
+    select: { id: true, phone: true }
+  });
+  const order = await prisma.paymentOrder.create({
+    data: {
+      userId: user.id,
+      amountKopecks: rublesToKopecks(amountRub)
+    }
+  });
+
+  let payment;
+  try {
+    payment = await createCloudPaymentsOrder({
+      orderId: order.id,
+      userId: user.id,
+      phone: user.phone,
+      amountKopecks: order.amountKopecks
+    });
+  } catch (error) {
+    await prisma.paymentOrder.update({
+      where: { id: order.id },
+      data: { status: PaymentOrderStatus.FAILED }
+    });
+    console.error("CloudPayments order creation failed", { orderId: order.id, error });
+    res.status(502).json({ message: "Could not create a payment. Please try again later." });
+    return;
+  }
 
   res.status(201).json({
     billing: await getBillingState(req.user!.userId),
-    payment: {
-      paymentUrl: createCloudTipsPaymentUrl(amountRub, req.user!.userId)
-    }
+    payment
   });
 });
 

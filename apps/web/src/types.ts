@@ -4,6 +4,7 @@ export type AuthUser = {
   fullName?: string | null;
   timeZone?: string | null;
   createdAt?: string;
+  isAdmin: boolean;
 };
 
 export type AuthResponse = {
@@ -97,7 +98,7 @@ export type CallLog = {
   durationSeconds: number;
   summary?: string | null;
   transcript?: string | null;
-  recordingUrl?: string | null;
+  hasRecording: boolean;
   createdAt: string;
   transcriptDeliveries?: TranscriptDelivery[];
 };
@@ -114,8 +115,6 @@ export type TranscriptDelivery = {
   id: string;
   channel: "TELEGRAM";
   status: "PENDING" | "SENT" | "FAILED";
-  target?: string | null;
-  payloadPreview?: string | null;
   createdAt: string;
 };
 
@@ -160,9 +159,8 @@ export type CallLogsPagination = OutboundPagination;
 
 export type BillingTransaction = {
   id: string;
-  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE" | "ADMIN_ADJUSTMENT";
-  amountSeconds: number;
-  amountRub?: number | null;
+  type: "FREE_GRANT" | "TOP_UP" | "NUMBER_PURCHASE" | "CALL_CHARGE" | "ADMIN_ADJUSTMENT" | "PAYMENT_REFUND";
+  amountRub: number;
   amountKopecks: number;
   note?: string | null;
   createdAt: string;
@@ -172,8 +170,6 @@ export type BillingPagination = OutboundPagination;
 
 export type BillingState = {
   rubleBalance: number;
-  minuteBalanceSeconds: number;
-  totalPurchasedSeconds: number;
   numberPurchasedAt?: string | null;
   numberRentExpiresAt?: string | null;
   numberRentalPriceRub: number;
@@ -197,9 +193,7 @@ export type GoogleIntegration = {
 export type TelegramIntegration = {
   status: "DISCONNECTED" | "CONNECTED";
   botUsername: string;
-  linkToken: string;
   botLink: string;
-  chatId?: string | null;
   username?: string | null;
   connectedAt?: string | null;
 };

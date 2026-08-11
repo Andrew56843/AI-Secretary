@@ -3,6 +3,7 @@ import express from "express";
 import { env } from "./config.js";
 import { prisma } from "./lib/prisma.js";
 import { startNumberRentalScheduler } from "./lib/number-rental.js";
+import { securityHeaders } from "./middleware/security-headers.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { billingRouter } from "./routes/billing.js";
@@ -11,17 +12,29 @@ import { callsRouter } from "./routes/calls.js";
 import { contactNamesRouter } from "./routes/contact-names.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { outboundRouter } from "./routes/outbound.js";
+import { paymentWebhooksRouter } from "./routes/payment-webhooks.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { voiceInternalRouter } from "./routes/voice-internal.js";
 
 const app = express();
+const allowedOrigins = new Set(
+  env.CORS_ORIGIN.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
+app.disable("x-powered-by");
+app.set("trust proxy", env.TRUST_PROXY_HOPS);
+app.use(securityHeaders);
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin(origin, callback) {
+      callback(null, !origin || allowedOrigins.has(origin));
+    },
     credentials: true
   })
 );
+app.use("/api/billing/webhooks/cloudpayments", paymentWebhooksRouter);
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/healthz", async (_req, res) => {

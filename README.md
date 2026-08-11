@@ -1,170 +1,86 @@
-# AI Secretary Platform
+# Callsec
 
-Portfolio MVP for a SaaS-style AI secretary service:
+Callsec is a multi-tenant AI phone secretary for inbound and outbound calls. Each account has its own prompts, greeting, voice, model, forwarding rules, balance, phone number, call history, contacts, Telegram delivery, and Google Calendar connection.
 
-- frontend: React + TypeScript (`apps/web`)
-- backend: Node.js + Express + TypeScript + Prisma (`apps/api`)
-- database: PostgreSQL
-- deployment: Docker Compose
-- payments: CloudTips redirect
+## Stack
 
-## What this demo does
+- React 19, TypeScript, Vite and nginx
+- Node.js 24, Express 5 and TypeScript
+- PostgreSQL and Prisma ORM
+- Asterisk AudioSocket voice service in `server.js`
+- OpenAI Realtime API and post-call transcription
+- Docker Compose for local and production web/API environments
 
-- user registration and login with JWT
-- creates/updates an AI assistant profile
-- reserves a phone number from a free pool
-- stores and displays call logs
-- serves pre-generated voice preview MP3 files from `apps/web/public/voice-previews`
-- redirects balance top-ups to CloudTips with amount and user id
-- connects Google Calendar through OAuth 2.0 and stores server-side tokens for future event automation
+## Repository
 
-## Voice Service
+- `apps/web` - public site and customer dashboard
+- `apps/api` - authentication, tenant data, billing, integrations and voice-service API
+- `server.js` - Asterisk/OpenAI call engine
+- `scripts` - focused voice-service tests and utilities
+- `.codex/rules` - project and deployment rules for Codex sessions
 
-The telephony voice service entrypoint is `server.js`.
+PostgreSQL is the source of truth. The voice service must resolve every call through the API and an exact `AssistantProfile`; it has no shared demo-client fallback.
 
-On the Asterisk test stand it is deployed as:
+## Local Development
 
-```text
-/home/andrew/ai/server.js
-```
-
-Local checks:
+Use Node.js 24 (`.nvmrc`). Install dependencies and start the hot-reload Docker environment:
 
 ```bash
-npm run voice:check
-```
-
-Local start, when the required telephony/OpenAI environment variables are present:
-
-```bash
-npm run voice:start
-```
-
-## Run with Docker
-
-```bash
-docker compose up --build
-```
-
-This is the production-like local environment:
-
-- web: `http://localhost:8080`
-- api health: `http://localhost:4000/healthz`
-- postgres: `localhost:5432`
-- pgAdmin: `http://localhost:5050`
-
-Windows note for folders with non-ASCII path names:
-
-```powershell
-$env:DOCKER_BUILDKIT='0'
-docker compose up --build -d
-```
-
-## Development Docker Environment
-
-Use this mode while coding. Source files are mounted into containers, frontend uses Vite hot reload, and backend uses `tsx watch`.
-
-```bash
+npm ci
 npm run docker:dev:up
 ```
 
-Development URLs:
+Development endpoints:
 
 - web: `http://localhost:5173`
-- api health: `http://localhost:14000/healthz`
-- postgres: `localhost:15432`
+- API health: `http://localhost:14000/healthz`
+- PostgreSQL: `localhost:15432`
 - pgAdmin: `http://localhost:15050`
 
-Watch logs:
+Copy `.env.example` to `.env` and provide local secrets when running services outside Docker. `npm run db:seed` is development-only, never deletes existing accounts, and can be customized with `SEED_OWNER_PHONE`, `SEED_OWNER_PASSWORD`, `SEED_OWNER_NAME`, and `SEED_RESERVED_NUMBERS`.
+
+## Checks
 
 ```bash
-npm run docker:dev:logs
+npm run db:generate
+npm run lint
+npm test
+npm run build
+npm audit
 ```
 
-Stop dev environment:
+Voice-only checks:
 
 ```bash
-npm run docker:dev:down
+npm run voice:check
+npm run voice:test
 ```
 
-pgAdmin login:
+## Production
 
-- email: `admin@example.com`
-- password: `admin`
+`docker-compose.server.yml` deploys the web and API services. The API runs `prisma migrate deploy` before it starts. The Asterisk voice service currently runs separately under PM2 because it needs host Asterisk commands and spool directories.
 
-Connect pgAdmin to PostgreSQL:
+Create production secrets independently. In particular, do not reuse `JWT_SECRET`, `DATA_ENCRYPTION_KEY`, or `VOICE_SERVICE_TOKEN`. Google OAuth tokens are encrypted with AES-256-GCM using `DATA_ENCRYPTION_KEY`; legacy encrypted values remain readable during key separation.
 
-- host: `db`
-- port: `5432`
-- user: `postgres`
-- password: `postgres`
-- database: `ai_secretary`
-
-Seed account:
-
-- phone: `+79054176285`
-- password: `123456`
+See [docs/PRODUCTION_CHECKLIST.md](docs/PRODUCTION_CHECKLIST.md) before accepting customers.
 
 ## Payments
 
-`/api/billing/top-up` validates the amount and returns a CloudTips payment link:
+Balance top-ups use CloudPayments orders, not CloudTips. The API creates a local `PaymentOrder`; money is credited only after a signed `Pay` webhook with matching order, account, currency, and amount. Duplicate notifications are idempotent. Full refund notifications reverse the balance entry.
+
+Required webhook URLs:
 
 ```text
-https://pay.cloudtips.ru/p/73767f54?amount=[amount]&hideamount=true&userid=[userId]
+https://callsec.ru/api/billing/webhooks/cloudpayments/check
+https://callsec.ru/api/billing/webhooks/cloudpayments/pay
+https://callsec.ru/api/billing/webhooks/cloudpayments/fail
+https://callsec.ru/api/billing/webhooks/cloudpayments/refund
 ```
 
-CloudTips payments do not automatically credit the in-app balance yet.
+Without `CLOUDPAYMENTS_PUBLIC_ID` and `CLOUDPAYMENTS_API_SECRET`, top-up returns `503` and never pretends that a payment succeeded.
 
-## Google Calendar
+## Tenant Isolation
 
-Create an OAuth client in Google Cloud Console and add the app callback URL to Authorized redirect URIs:
+Customer routes derive the owner from the verified JWT and scope profiles, contacts, calls, recordings, billing, and integrations to that user. The internal voice API uses a separate service token and bills the exact assistant profile used by the call. Password changes increment `authVersion`, revoking all older session tokens.
 
-```text
-https://your-domain.example/api/integrations/google/oauth/callback
-```
-
-Required server environment variables:
-
-```bash
-PUBLIC_WEB_URL=https://your-domain.example
-CORS_ORIGIN=https://your-domain.example
-VITE_API_URL=
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_OAUTH_REDIRECT_URI=https://your-domain.example/api/integrations/google/oauth/callback
-```
-
-`VITE_API_URL` is intentionally empty in the container build: nginx proxies `/api/*` from the web container to the API service, so the browser can use the same domain for the site and backend.
-
-## Local development
-
-1. Copy env:
-
-```bash
-cp apps/api/.env.example apps/api/.env
-```
-
-2. Start PostgreSQL only:
-
-```bash
-docker compose up -d db
-```
-
-3. Run migrations and seed:
-
-```bash
-npm run db:migrate
-npm run db:seed
-```
-
-Reset database to a clean development state:
-
-```bash
-npm run db:reset
-```
-
-4. Start apps:
-
-```bash
-npm run dev
-```
+The current product intentionally provides one inbound and one outbound scenario per account. Supporting multiple simultaneous scenarios for one account is a separate product change because it requires number-to-profile routing and a dashboard scenario switcher.

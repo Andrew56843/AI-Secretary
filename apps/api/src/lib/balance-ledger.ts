@@ -1,11 +1,9 @@
 import { type BillingTransactionType, type Prisma } from "@prisma/client";
-import { legacyWholeRublesFromKopecks } from "./money.js";
 
 type BalanceLedgerInput = {
   userId: string;
   type: BillingTransactionType;
   amountKopecks: number;
-  amountSeconds?: number;
   note?: string | null;
   allowNegativeBalance?: boolean;
 };
@@ -27,20 +25,6 @@ export async function getLedgerBalanceKopecks(tx: Prisma.TransactionClient, user
   return result._sum.amountKopecks ?? 0;
 }
 
-export async function syncCachedBalanceFromLedger(tx: Prisma.TransactionClient, userId: string) {
-  const balanceKopecks = await getLedgerBalanceKopecks(tx, userId);
-
-  await tx.user.update({
-    where: { id: userId },
-    data: {
-      rubleBalanceKopecks: balanceKopecks,
-      rubleBalance: legacyWholeRublesFromKopecks(balanceKopecks)
-    }
-  });
-
-  return balanceKopecks;
-}
-
 export async function createBalanceLedgerEntry(tx: Prisma.TransactionClient, input: BalanceLedgerInput) {
   await lockUserLedger(tx, input.userId);
 
@@ -55,8 +39,6 @@ export async function createBalanceLedgerEntry(tx: Prisma.TransactionClient, inp
     data: {
       userId: input.userId,
       type: input.type,
-      amountSeconds: input.amountSeconds ?? 0,
-      amountRub: null,
       amountKopecks: input.amountKopecks,
       note: input.note ?? null
     }
@@ -64,10 +46,7 @@ export async function createBalanceLedgerEntry(tx: Prisma.TransactionClient, inp
 
   await tx.user.update({
     where: { id: input.userId },
-    data: {
-      rubleBalanceKopecks: nextBalanceKopecks,
-      rubleBalance: legacyWholeRublesFromKopecks(nextBalanceKopecks)
-    }
+    data: { rubleBalanceKopecks: nextBalanceKopecks }
   });
 
   return nextBalanceKopecks;

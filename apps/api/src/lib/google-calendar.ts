@@ -706,6 +706,7 @@ async function refreshGoogleAccessToken(account: GoogleAccount) {
     where: { id: account.id },
     data: {
       accessToken: encryptSecret(payload.access_token),
+      refreshToken: encryptSecret(refreshToken),
       tokenExpiresAt: new Date(Date.now() + (payload.expires_in ?? 3600) * 1000),
       scope: payload.scope ?? account.scope
     }

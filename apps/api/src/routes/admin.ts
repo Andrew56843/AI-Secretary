@@ -4,12 +4,13 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { createBalanceLedgerEntry } from "../lib/balance-ledger.js";
 import { createToken } from "../lib/auth.js";
+import { isAdminPhone } from "../lib/admin-access.js";
 import { kopecksToRubles, rublesToKopecks } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
+import { publicUser } from "../lib/public-user.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const adminRouter = Router();
-const ADMIN_PHONE = "+79054176285";
 
 const usersQuerySchema = z.object({
   search: z.string().trim().max(80).optional()
@@ -25,10 +26,6 @@ const balanceAdjustmentSchema = z.object({
   note: z.string().trim().max(300).optional()
 });
 
-function isAdminPhone(phone: string | null | undefined) {
-  return phone === ADMIN_PHONE;
-}
-
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!isAdminPhone(req.user?.phone)) {
     res.status(403).json({ message: "Admin access denied" });
@@ -36,16 +33,6 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
 
   next();
-}
-
-function publicUser(user: { id: string; phone: string; fullName: string | null; timeZone?: string | null; createdAt?: Date }) {
-  return {
-    id: user.id,
-    phone: user.phone,
-    fullName: user.fullName,
-    timeZone: user.timeZone ?? "Europe/Moscow",
-    createdAt: user.createdAt
-  };
 }
 
 function publicAdminUser(
@@ -164,7 +151,15 @@ adminRouter.post("/users/:id/impersonate", async (req, res) => {
   }
 
   res.json({
-    token: createToken({ userId: user.id, phone: user.phone }),
+    token: createToken(
+      {
+        userId: user.id,
+        phone: user.phone,
+        authVersion: user.authVersion,
+        impersonatedByUserId: req.user!.userId
+      },
+      "30m"
+    ),
     user: publicUser(user)
   });
 });

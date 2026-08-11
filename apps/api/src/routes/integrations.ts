@@ -18,11 +18,6 @@ const googleConnectSchema = z.object({
   calendarId: z.string().trim().min(1).max(200).default("primary")
 });
 
-const telegramConnectSchema = z.object({
-  username: z.string().trim().min(2).max(80).optional(),
-  chatId: z.string().trim().min(2).max(80).optional()
-});
-
 type GoogleTokenSuccess = {
   access_token: string;
   expires_in?: number;
@@ -152,7 +147,10 @@ async function ensureTelegramAccount(userId: string) {
 
 function publicTelegram(account: Awaited<ReturnType<typeof ensureTelegramAccount>>) {
   return {
-    ...account,
+    status: account.status,
+    botUsername: account.botUsername,
+    username: account.username,
+    connectedAt: account.connectedAt,
     botLink: `https://t.me/${account.botUsername}?start=${account.linkToken}`
   };
 }
@@ -308,27 +306,6 @@ integrationsRouter.post("/google/disconnect", requireAuth, async (req, res) => {
 
 integrationsRouter.post("/telegram/link", requireAuth, async (req, res) => {
   const account = await ensureTelegramAccount(req.user!.userId);
-  res.json({ telegram: publicTelegram(account) });
-});
-
-integrationsRouter.post("/telegram/connect", requireAuth, async (req, res) => {
-  const parsed = telegramConnectSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
-    return;
-  }
-
-  const base = await ensureTelegramAccount(req.user!.userId);
-  const account = await prisma.telegramAccount.update({
-    where: { id: base.id },
-    data: {
-      status: "CONNECTED",
-      username: parsed.data.username,
-      chatId: parsed.data.chatId,
-      connectedAt: new Date()
-    }
-  });
-
   res.json({ telegram: publicTelegram(account) });
 });
 

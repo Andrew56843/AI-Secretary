@@ -10,7 +10,7 @@ import { createBalanceLedgerEntry } from "./balance-ledger.js";
 import { rublesToKopecks } from "./money.js";
 
 type BillableCallInput = {
-  userId: string;
+  assistantProfileId: string;
   direction: CallDirection;
   customerPhone: string;
   status: CallStatus;
@@ -46,14 +46,11 @@ function calculateCallChargeKopecks(durationSeconds: number, rateRubPerMinute: n
 
 export async function createBillableCallLog(tx: Prisma.TransactionClient, input: BillableCallInput) {
   const profile = await tx.assistantProfile.findUnique({
-    where: {
-      userId_mode: {
-        userId: input.userId,
-        mode: input.direction
-      }
-    },
+    where: { id: input.assistantProfileId },
     select: {
       id: true,
+      userId: true,
+      mode: true,
       realtimeModel: true,
       user: {
         select: {
@@ -73,6 +70,9 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
   if (!profile) {
     throw new Error("PROFILE_NOT_FOUND");
   }
+  if (profile.mode !== input.direction) {
+    throw new Error("PROFILE_DIRECTION_MISMATCH");
+  }
 
   const directionRates = MODEL_RATES_RUB_PER_MINUTE[input.direction];
   const realtimeModel = directionRates[profile.realtimeModel]
@@ -82,9 +82,8 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
   const amountKopecks = calculateCallChargeKopecks(input.durationSeconds, rateRubPerMinute);
 
   await createBalanceLedgerEntry(tx, {
-    userId: input.userId,
+    userId: profile.userId,
     type: BillingTransactionType.CALL_CHARGE,
-    amountSeconds: -input.durationSeconds,
     amountKopecks: -amountKopecks,
     note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`
   });
@@ -107,7 +106,7 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     const target = telegram.chatId ?? telegram.username ?? "telegram";
     await tx.transcriptDelivery.create({
       data: {
-        userId: input.userId,
+        userId: profile.userId,
         callLogId: log.id,
         channel: TranscriptChannel.TELEGRAM,
         status: TranscriptDeliveryStatus.PENDING,
