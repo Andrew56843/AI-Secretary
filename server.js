@@ -317,7 +317,7 @@ function multipartField(boundary, name, value) {
   );
 }
 
-function openAiTranscribeWav(filePath, timeoutMs = 90_000) {
+function openAiTranscribeWav(filePath, timeoutMs = 90_000, transcriptionPrompt = '') {
   return new Promise((resolve, reject) => {
     if (!CONFIG.openAiApiKey) {
       reject(new Error('OPENAI_API_KEY is empty'));
@@ -351,10 +351,12 @@ function openAiTranscribeWav(filePath, timeoutMs = 90_000) {
         'utf8'
     );
     const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const prompt = clampTranscriptionPrompt(transcriptionPrompt);
     const payload = Buffer.concat([
       multipartField(boundary, 'model', CONFIG.postCallAudioTranscriptionModel),
       multipartField(boundary, 'language', CONFIG.defaultLanguage || 'ru'),
       multipartField(boundary, 'response_format', 'json'),
+      ...(prompt ? [multipartField(boundary, 'prompt', prompt)] : []),
       fileHeader,
       audio,
       closing,
@@ -958,7 +960,8 @@ async function buildProcessedCallLog(rawLog, callInfo = {}) {
     try {
       callerAudioTranscript = await openAiTranscribeWav(
           callInfo.callerWavPath,
-          CONFIG.postCallAudioTranscriptionTimeoutMs
+          CONFIG.postCallAudioTranscriptionTimeoutMs,
+          callInfo.transcriptionPrompt || DEFAULT_TRANSCRIPTION_PROMPT
       );
       if (callInfo.callerAudioTranscriptPath) {
         fs.writeFileSync(callInfo.callerAudioTranscriptPath, `${callerAudioTranscript}\n`, 'utf8');
