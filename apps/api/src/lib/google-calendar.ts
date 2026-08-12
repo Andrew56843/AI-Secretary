@@ -642,12 +642,12 @@ function normalizeExtractedCalendarAction(extracted: CalendarActionExtraction): 
   };
 }
 
-function buildEventSummary(extracted: CalendarActionExtraction) {
+function buildEventSummary(extracted: CalendarActionExtraction, fallback = "Callsec appointment") {
   const name = extracted.customerName?.trim();
   const reason = extracted.reason?.trim();
   const generated = [name, reason].filter(Boolean).join(" - ");
 
-  return (extracted.title?.trim() || generated || "Callsec appointment").slice(0, 200);
+  return (extracted.title?.trim() || generated || fallback).slice(0, 200);
 }
 
 function buildEventDescription(input: {
@@ -755,6 +755,44 @@ async function findExistingEvent(params: {
   });
 
   return payload.items?.[0] ?? null;
+}
+
+async function findEventsByPrivateProperty(params: {
+  accessToken: string;
+  calendarId: string;
+  property: string;
+  value: string;
+}) {
+  const url = new URL(`${GOOGLE_CALENDAR_BASE_URL}/calendars/${encodeURIComponent(params.calendarId)}/events`);
+  url.searchParams.set("privateExtendedProperty", `${params.property}=${params.value}`);
+  url.searchParams.set("showDeleted", "false");
+  url.searchParams.set("maxResults", "10");
+
+  const payload = await fetchGoogleCalendarJson<GoogleCalendarEventListResponse>(url, {
+    headers: { Authorization: `Bearer ${params.accessToken}` }
+  });
+  return payload.items ?? [];
+}
+
+function buildFinalEventDescription(input: {
+  currentDescription?: string;
+  callLogId: string;
+  customerPhone: string;
+  transcript: string;
+}) {
+  const current = String(input.currentDescription ?? "").trim();
+  const metadata = current
+    ? current.split(/\n(?:Transcript|Транскрипт разговора):\s*\n/i)[0]!.trim()
+    : [
+        "Created automatically by Callsec from a completed phone call.",
+        `Call log ID: ${input.callLogId}`,
+        `Customer phone: ${input.customerPhone}`
+      ].join("\n");
+  const normalizedMetadata = metadata.match(/^Call log ID:/im)
+    ? metadata.replace(/^Call log ID:.*$/im, `Call log ID: ${input.callLogId}`)
+    : `${metadata}\nCall log ID: ${input.callLogId}`;
+
+  return `${normalizedMetadata}\n\nTranscript:\n${input.transcript.slice(0, 6000)}`;
 }
 
 function buildCalendarSearchWindow(action: NormalizedCalendarAction, createdAt: Date, timeZone: string) {
@@ -1442,7 +1480,7 @@ async function rescheduleGoogleCalendarEvent(params: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      summary: buildEventSummary(params.action) || event.summary,
+      summary: buildEventSummary(params.action, event.summary?.trim() || "Callsec appointment"),
       description: buildEventDescription({
         callLogId: params.callLogId,
         customerPhone: params.customerPhone,
@@ -1689,6 +1727,73 @@ export async function maybeSyncCalendarFromCallLog(input: {
     timeZone: context.timeZone,
     policy
   });
+}
+
+export async function finalizeCalendarTranscriptForCall(input: {
+  userId: string;
+  callUuid: string;
+  callLogId: string;
+  customerPhone: string;
+  transcript: string;
+}) {
+  const transcript = input.transcript.trim();
+  if (!transcript || !input.callUuid.trim()) {
+    return 0;
+  }
+
+  const context = await getConnectedCalendarContext(input.userId);
+  if (context.status !== "ready") {
+    return 0;
+  }
+
+  const calendarId = context.account.calendarId || "primary";
+  const provisionalCallLogId = `voice-${input.callUuid}`;
+  const eventsById = new Map<string, GoogleCalendarEventResponse>();
+  for (const property of ["callsecCallLogId", "callsecLastCallLogId"]) {
+    const events = await findEventsByPrivateProperty({
+      accessToken: context.accessToken,
+      calendarId,
+      property,
+      value: provisionalCallLogId
+    });
+    for (const event of events) {
+      if (event.id) {
+        eventsById.set(event.id, event);
+      }
+    }
+  }
+
+  for (const event of eventsById.values()) {
+    const privateProperties = event.extendedProperties?.private ?? {};
+    const url = new URL(
+      `${GOOGLE_CALENDAR_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(event.id!)}`
+    );
+    await fetchGoogleCalendarJson<GoogleCalendarEventResponse>(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${context.accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        description: buildFinalEventDescription({
+          currentDescription: event.description,
+          callLogId: input.callLogId,
+          customerPhone: input.customerPhone,
+          transcript
+        }),
+        extendedProperties: {
+          private: {
+            ...privateProperties,
+            callsecCustomerPhone: input.customerPhone,
+            callsecLastCallLogId: input.callLogId,
+            callsecUpdatedBy: "callsec"
+          }
+        }
+      })
+    });
+  }
+
+  return eventsById.size;
 }
 
 export const maybeCreateCalendarEventFromCallLog = maybeSyncCalendarFromCallLog;

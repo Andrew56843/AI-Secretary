@@ -13,7 +13,10 @@ const WebSocket = require('ws');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const {
+  buildCanonicalTranscript,
   findLikelyTranscriptionPromptLeak,
+  formatDiarizedTranscript,
+  indexRawTranscript,
   isLikelyAssistantEcho,
   sanitizeRealtimeTranscript,
   spokenTextSimilarity,
@@ -104,6 +107,12 @@ const CONFIG = {
       process.env.POST_CALL_AUDIO_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe',
   postCallAudioTranscriptionTimeoutMs:
       Number(process.env.POST_CALL_AUDIO_TRANSCRIPTION_TIMEOUT_MS || 90_000),
+  postCallDiarizationEnabled:
+      String(process.env.POST_CALL_DIARIZATION_ENABLED || 'true') === 'true',
+  postCallDiarizationModel:
+      process.env.POST_CALL_DIARIZATION_MODEL || 'gpt-4o-transcribe-diarize',
+  postCallDiarizationTimeoutMs:
+      Number(process.env.POST_CALL_DIARIZATION_TIMEOUT_MS || 120_000),
   postCallAudioMaxBytes: Number(process.env.POST_CALL_AUDIO_MAX_BYTES || 25_000_000),
   postCallLogMaxChars: Number(process.env.POST_CALL_LOG_MAX_CHARS || 20_000),
   transcriptionPromptMaxChars: Number(process.env.TRANSCRIPTION_PROMPT_MAX_CHARS || 1024),
@@ -420,6 +429,99 @@ function openAiTranscribeWav(filePath, timeoutMs = 90_000, transcriptionPrompt =
   });
 }
 
+function openAiTranscribeDiarizedWav(filePath, timeoutMs = 120_000) {
+  return new Promise((resolve, reject) => {
+    if (!CONFIG.openAiApiKey) {
+      reject(new Error('OPENAI_API_KEY is empty'));
+      return;
+    }
+    if (!proxyAgent) {
+      reject(new Error('OPENAI_PROXY_URL is empty; refusing post-call diarization without proxy'));
+      return;
+    }
+
+    let audio;
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size <= 44) {
+        throw new Error('conversation WAV is empty');
+      }
+      if (stat.size > CONFIG.postCallAudioMaxBytes) {
+        throw new Error(`conversation WAV is too large: ${stat.size} bytes`);
+      }
+      audio = fs.readFileSync(filePath);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const boundary = `----callsec-${crypto.randomBytes(12).toString('hex')}`;
+    const fileHeader = Buffer.from(
+        `--${boundary}\r\n` +
+        'Content-Disposition: form-data; name="file"; filename="conversation.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n',
+        'utf8'
+    );
+    const closing = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const payload = Buffer.concat([
+      multipartField(boundary, 'model', CONFIG.postCallDiarizationModel),
+      multipartField(boundary, 'language', CONFIG.defaultLanguage || 'ru'),
+      multipartField(boundary, 'response_format', 'diarized_json'),
+      multipartField(boundary, 'chunking_strategy', 'auto'),
+      fileHeader,
+      audio,
+      closing,
+    ]);
+
+    const req = https.request(
+        {
+          hostname: 'api.openai.com',
+          path: '/v1/audio/transcriptions',
+          method: 'POST',
+          agent: proxyAgent,
+          timeout: timeoutMs,
+          headers: {
+            Authorization: `Bearer ${CONFIG.openAiApiKey}`,
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'content-length': payload.length,
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => {
+            const responseText = Buffer.concat(chunks).toString('utf8');
+            let json;
+            try {
+              json = responseText ? JSON.parse(responseText) : {};
+            } catch {
+              reject(new Error(`OpenAI diarization returned non-JSON response: ${responseText.slice(0, 300)}`));
+              return;
+            }
+
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              const message = json?.error?.message || responseText.slice(0, 300) || `HTTP ${res.statusCode}`;
+              reject(new Error(`OpenAI audio diarization failed: ${message}`));
+              return;
+            }
+
+            if (!Array.isArray(json?.segments) || json.segments.length === 0) {
+              reject(new Error('OpenAI audio diarization returned no segments'));
+              return;
+            }
+            resolve(json);
+          });
+        }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`OpenAI audio diarization timeout after ${timeoutMs}ms`));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
 function platformApiUrl(apiPath) {
   if (!CONFIG.platformApiBaseUrl) return null;
   return new URL(apiPath, CONFIG.platformApiBaseUrl.replace(/\/+$/, '') + '/').toString();
@@ -501,12 +603,20 @@ async function sendPlatformCallLog(payload) {
     return null;
   }
 
-  try {
-    return await platformPostJson('/internal/voice/call/logs', payload, Math.max(CONFIG.platformApiTimeoutMs, 5000));
-  } catch (err) {
-    logErr('[PLATFORM]', `call log failed: ${String(err?.message || err)}`);
-    return null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await platformPostJson('/internal/voice/call/logs', payload, Math.max(CONFIG.platformApiTimeoutMs, 5000));
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) {
+        await sleep(400 * attempt);
+      }
+    }
   }
+
+  logErr('[PLATFORM]', `call log failed after 3 attempts: ${String(lastError?.message || lastError)}`);
+  return null;
 }
 
 async function sendPlatformCalendarAction(payload) {
@@ -902,27 +1012,28 @@ function appendJsonl(filePath, obj) {
 }
 
 const POST_CALL_LOG_SYSTEM_PROMPT = `
-Ты редактор транскрипта телефонного разговора с AI-секретарём.
-На входе сырой realtime-лог с репликами "Assi:" и "User:", а также может быть приложено отдельное распознавание чистой аудиодорожки клиента.
-Верни только очищенный лог в том же формате, без комментариев, без markdown.
+Ты восстанавливаешь только реплики клиента в телефонном разговоре с AI-секретарём.
+Верни строгий JSON по заданной схеме. Не возвращай markdown или пояснения.
 
 Правила:
-- Сохраняй порядок реплик.
-- Каждую реплику Assi копируй дословно, в исходном месте и порядке. Не удаляй, не объединяй и не переставляй строки Assi: это точный текст синтеза.
-- Если приложено распознавание чистой дорожки клиента, используй его как основной источник точных слов и порядка реплик User. Сопоставь их с realtime-логом по порядку и контексту.
-- Если в чистой дорожке есть реальная реплика клиента, которой нет в realtime-логе, и её место понятно по порядку и контексту, обязательно вставь её как User. Это относится и к коротким ответам, благодарности и последней фразе перед завершением звонка.
+- Не возвращай реплики Assi: программа добавит их сама из точного журнала синтеза.
+- afterAssistantIndex — номер последней уже прозвучавшей реплики A перед этой репликой клиента; 0 означает речь до первой реплики A.
+- Верни каждую реальную реплику клиента ровно один раз и в хронологическом порядке.
+- Для ролей и места реплик в разговоре используй диаризацию общего аудио. Короткие фрагменты во время одновременной речи могут быть разделены неточно, поэтому сверяй их с чистой дорожкой клиента и точными строками Assi.
+- Для точных слов клиента используй чистую дорожку клиента как основной источник, а диаризацию и realtime-строки User как взаимную проверку. Сохраняй смысл, числа, даты, время, имена и отрицания буквально.
+- Если в чистой дорожке есть реальная реплика клиента, которой нет в realtime-логе, обязательно верни её, определив место по диаризации и контексту.
 - Никогда не удаляй намерение клиента создать, перенести или отменить запись. При расхождении формулировки используй чистую дорожку клиента.
-- Реплики User исправляй только по чистой дорожке клиента, контексту разговора, сценарию и здравому смыслу.
 - В телефонном канале речь AI иногда возвращается эхом и ошибочно попадает в строку User.
-- Если строка User отсутствует в чистой дорожке клиента и похожа на шум, эхо, реплику AI, приветствие или текст сценария от лица звонящего AI, убери её. Перенеси её в Assi только если это действительно текст синтеза и такой реплики Assi ещё нет.
-- Не переноси настоящие ответы клиента в Assi только из-за делового или длинного текста.
+- Если строка User отсутствует в аудио и похожа на шум, эхо, реплику AI, приветствие или текст сценария, не возвращай её.
 - Не выдумывай новые факты, услуги, адреса, имена, суммы и номера.
-- Если фразу невозможно восстановить уверенно, пиши: User: [неразборчиво]
-- Если понятно только частично, оставь понятную часть и пометь сомнение скобками: [неразборчиво].
+- Не исправляй ошибочные действия самого секретаря и не переписывай разговор так, будто он прошёл лучше: транскрипт должен честно показывать, что было сказано.
+- Если фразу невозможно восстановить уверенно, верни text: "[неразборчиво]".
+- Если понятно только частично, оставь понятную часть и добавь "[неразборчиво]".
 `.trim();
 
-function buildPostCallLogUserPrompt(rawLog, callInfo = {}, callerAudioTranscript = '') {
+function buildPostCallLogUserPrompt(rawLog, callInfo = {}, callerAudioTranscript = '', diarizedTranscript = '') {
   const clipped = String(rawLog || '').slice(0, CONFIG.postCallLogMaxChars);
+  const indexed = indexRawTranscript(clipped);
   const callerAudio = String(callerAudioTranscript || '').slice(0, CONFIG.postCallLogMaxChars);
   return [
     `DID: ${callInfo.did || '-'}`,
@@ -934,8 +1045,11 @@ function buildPostCallLogUserPrompt(rawLog, callInfo = {}, callerAudioTranscript
     'Распознавание чистой дорожки клиента (только его речь, по порядку):',
     callerAudio || '[недоступно]',
     '',
-    'Сырой лог:',
-    clipped || '[пустой лог]',
+    'Диаризация общего аудио (время, роль, распознанный текст):',
+    String(diarizedTranscript || '').slice(0, CONFIG.postCallLogMaxChars) || '[недоступно]',
+    '',
+    'Индексированный сырой лог (A — точный синтез AI, U — предварительное realtime-распознавание клиента):',
+    indexed.annotatedText || '[пустой лог]',
   ].join('\n');
 }
 
@@ -964,35 +1078,107 @@ async function buildProcessedCallLog(rawLog, callInfo = {}) {
   if (!CONFIG.postCallLogEnabled) return String(rawLog || '').trim();
 
   let callerAudioTranscript = '';
-  if (CONFIG.postCallAudioTranscriptionEnabled && callInfo.callerWavPath) {
-    try {
-      callerAudioTranscript = await openAiTranscribeWav(
-          callInfo.callerWavPath,
-          CONFIG.postCallAudioTranscriptionTimeoutMs,
-          callInfo.transcriptionPrompt || DEFAULT_TRANSCRIPTION_PROMPT
-      );
+  let diarizedTranscript = '';
+  const callerTask = CONFIG.postCallAudioTranscriptionEnabled && callInfo.callerWavPath
+      ? openAiTranscribeWav(
+        callInfo.callerWavPath,
+        CONFIG.postCallAudioTranscriptionTimeoutMs,
+        callInfo.transcriptionPrompt || DEFAULT_TRANSCRIPTION_PROMPT
+      )
+      : Promise.resolve('');
+  const diarizationTask = CONFIG.postCallDiarizationEnabled && callInfo.conversationWavPath
+      ? openAiTranscribeDiarizedWav(
+        callInfo.conversationWavPath,
+        CONFIG.postCallDiarizationTimeoutMs
+      )
+      : Promise.resolve(null);
+  const [callerResult, diarizationResult] = await Promise.allSettled([callerTask, diarizationTask]);
+
+  if (callerResult.status === 'fulfilled') {
+    callerAudioTranscript = String(callerResult.value || '').trim();
+    if (callerAudioTranscript) {
       if (callInfo.callerAudioTranscriptPath) {
         fs.writeFileSync(callInfo.callerAudioTranscriptPath, `${callerAudioTranscript}\n`, 'utf8');
       }
       log('[POSTCALL]', `caller-only audio transcript ready; chars=${callerAudioTranscript.length}`);
-    } catch (err) {
-      logErr('[POSTCALL]', `caller-only audio transcription failed: ${String(err?.message || err)}`);
+    }
+  } else {
+    logErr('[POSTCALL]', `caller-only audio transcription failed: ${String(callerResult.reason?.message || callerResult.reason)}`);
+  }
+
+  if (diarizationResult.status === 'fulfilled' && diarizationResult.value) {
+    const diarized = formatDiarizedTranscript(diarizationResult.value.segments, rawLog);
+    diarizedTranscript = diarized.text;
+    if (callInfo.diarizedTranscriptJsonPath) {
+      fs.writeFileSync(callInfo.diarizedTranscriptJsonPath, `${JSON.stringify(diarizationResult.value, null, 2)}\n`, 'utf8');
+    }
+    if (callInfo.diarizedTranscriptPath) {
+      fs.writeFileSync(callInfo.diarizedTranscriptPath, `${diarizedTranscript}\n`, 'utf8');
+    }
+    log('[POSTCALL]', `diarized transcript ready; segments=${diarizationResult.value.segments.length} assistant=${diarized.assistantSpeaker || 'unknown'} score=${diarized.assistantScore.toFixed(2)}`);
+  } else if (diarizationResult.status === 'rejected') {
+    logErr('[POSTCALL]', `audio diarization failed: ${String(diarizationResult.reason?.message || diarizationResult.reason)}`);
+  }
+
+  const basePrompt = buildPostCallLogUserPrompt(rawLog, callInfo, callerAudioTranscript, diarizedTranscript);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const response = await openAiPostJson('/v1/chat/completions', {
+      model: CONFIG.postCallLogModel,
+      temperature: 0,
+      max_tokens: 2400,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'callsec_caller_turns',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              userTurns: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    afterAssistantIndex: { type: 'integer', minimum: 0 },
+                    text: { type: 'string', minLength: 1 },
+                  },
+                  required: ['afterAssistantIndex', 'text'],
+                },
+              },
+            },
+            required: ['userTurns'],
+          },
+        },
+      },
+      messages: [
+        { role: 'system', content: POST_CALL_LOG_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: attempt === 1
+            ? basePrompt
+            : `${basePrompt}\n\nПредыдущий ответ не прошёл проверку полноты. Верни все реальные реплики клиента из чистой дорожки, ничего не сокращая.`,
+        },
+      ],
+    }, CONFIG.postCallLogTimeoutMs);
+
+    const text = response?.choices?.[0]?.message?.content?.trim();
+    if (!text) {
+      lastError = new Error('OpenAI post-call log response is empty');
+      continue;
+    }
+    try {
+      return buildCanonicalTranscript(rawLog, text, callerAudioTranscript);
+    } catch (error) {
+      lastError = error;
+      logErr('[POSTCALL]', `canonical transcript validation failed; attempt=${attempt}: ${String(error?.message || error)}`);
     }
   }
 
-  const response = await openAiPostJson('/v1/chat/completions', {
-    model: CONFIG.postCallLogModel,
-    temperature: 0,
-    max_tokens: 2400,
-    messages: [
-      { role: 'system', content: POST_CALL_LOG_SYSTEM_PROMPT },
-      { role: 'user', content: buildPostCallLogUserPrompt(rawLog, callInfo, callerAudioTranscript) },
-    ],
-  }, CONFIG.postCallLogTimeoutMs);
-
-  const text = response?.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error('OpenAI post-call log response is empty');
-  return text;
+  throw lastError || new Error('OpenAI post-call log response is invalid');
 }
 
 function normalizeAssistantText(text) {
@@ -1634,11 +1820,14 @@ const SECRETARY_RUNTIME_INSTRUCTIONS = `
 - Сценарий клиента является единственным источником его услуг, товаров, цен, расписания, ограничений и желаемого результата разговора.
 - Не переноси правила, термины или факты из других компаний и предыдущих разговоров.
 - Не утверждай, что внешнее действие выполнено, если его не подтвердил доступный инструмент или сам сценарий не требует только зафиксировать заявку.
+- Никогда не подменяй выбранные клиентом дату, время, услугу, количество или другой существенный параметр ближайшим вариантом. Если вариант недоступен, объясни это и запроси новый выбор.
+- Перед необратимым действием коротко повтори существенные параметры и получи явное подтверждение клиента. Ответ на другой вопрос не считается подтверждением.
 - Не говори от женского лица, если выбран мужской или нейтральный голос. Не используй женские формы вроде "готова", "записала", "передала", "администраторша", если профиль явно не требует женский голос и женскую роль.
 - Если пол роли не задан явно, говори нейтрально: "могу помочь", "запись сделана", "уточню". Не называй себя девушкой, женщиной, администраторшей или мастерицей.
 - Телефонный эконом-режим: каждый ответ максимум одно короткое предложение до 12 слов, кроме финального итога.
 - Не произноси фразы-заполнители: "давайте аккуратно", "сейчас подумаю", "важный момент", "секунду", "сейчас уточню", если можно сразу спросить или ответить.
-- Когда цель сценария выполнена и ответ клиента больше не нужен, коротко сообщи итог и закончи явной прощальной фразой.
+- После итогового сообщения дождись подтверждения клиента. Если клиент перебил, уточняет или исправляет данные, ответь на это и не прощайся.
+- Только после подтверждения клиента, что всё верно и вопросов нет, закончи явной прощальной фразой.
 `.trim();
 
 const MASCULINE_OR_NEUTRAL_VOICES = new Set(['alloy', 'ash', 'ballad', 'echo', 'sage', 'verse', 'cedar']);
@@ -1710,10 +1899,13 @@ function buildCalendarToolInstruction(clientCfg) {
     'Когда клиент хочет создать, перенести или отменить запись, сначала собери только минимально нужные данные.',
     'Не отправляй владельцу для подтверждения обычные записи, переносы и отмены. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или ситуации вне сценария.',
     'Для CREATE нужны услуга, дата, время, имя и подтверждение номера.',
+    'Результат FIND_SLOTS является только списком предложений, а не выбором клиента. Не выбирай слот самостоятельно.',
+    'Если клиент отверг предложенные окна или назвал другое время, не используй старый слот. Проверь новое время и попроси явно подтвердить точные дату и время перед CREATE.',
     'Для RESCHEDULE нужны старая дата/время, новая дата/время, имя или подтверждённый номер. Не спрашивай услугу и мастера заново, если можно найти старую запись по телефону и времени.',
     'При переносе найденной записи сразу вызывай RESCHEDULE с её старым и новым временем: этот вызов сам проверит занятость и не считает переносимую запись конфликтом.',
     'Для CANCEL нужны старая дата/время или дата, имя или подтверждённый номер.',
     'Перед словами "запись создана", "запись перенесена" или "запись отменена" обязательно вызови callsec_calendar_action и дождись результата. Без успешного результата инструмента запрещено подтверждать успех.',
+    'Перед CREATE или RESCHEDULE кратко повтори точные услугу, дату и время и дождись явного "да" или равнозначного подтверждения именно этих данных.',
     'Если клиент говорит "перенести", "перенос", "поменять время" или "сдвинуть", действие всегда RESCHEDULE, никогда CREATE.',
     'Для CREATE передавай startDateTime и endDateTime в ISO 8601 с UTC offset. Для RESCHEDULE передавай старое время в targetStartDateTime или targetDate и новое время в startDateTime/endDateTime. Для CANCEL передавай targetStartDateTime или targetDate.',
     'Если инструмент вернул conflict, скажи, что это время занято, и попроси другое время. Если not_found, уточни дату, время или имя. Если created, cancelled или rescheduled, подтверди результат коротко.',
@@ -2011,6 +2203,8 @@ const audioServer = net.createServer((socket) => {
   let realtimeTranscriptTextPath = null;
   let processedTranscriptPath = null;
   let callerAudioTranscriptPath = null;
+  let diarizedTranscriptPath = null;
+  let diarizedTranscriptJsonPath = null;
   let metaPath = null;
 
   let callerWav = null;
@@ -2230,10 +2424,14 @@ const audioServer = net.createServer((socket) => {
     realtimeTranscriptTextPath = path.join(sessionDir, 'transcript_realtime.txt');
     processedTranscriptPath = path.join(sessionDir, 'transcript_processed.txt');
     callerAudioTranscriptPath = path.join(sessionDir, 'transcript_caller_audio.txt');
+    diarizedTranscriptPath = path.join(sessionDir, 'transcript_diarized.txt');
+    diarizedTranscriptJsonPath = path.join(sessionDir, 'transcript_diarized.json');
     metaPath = path.join(sessionDir, 'meta.json');
     summary.logs.realtime = 'transcript_realtime.txt';
     summary.logs.processed = 'transcript_processed.txt';
     summary.logs.callerAudio = 'transcript_caller_audio.txt';
+    summary.logs.diarized = 'transcript_diarized.txt';
+    summary.logs.diarizedJson = 'transcript_diarized.json';
 
     summary.uuid = uuidHex;
     summary.did = meta?.did || null;
@@ -2441,7 +2639,14 @@ const audioServer = net.createServer((socket) => {
       callerWavPath: sessionDir && summary.recordings.caller
           ? path.join(sessionDir, summary.recordings.caller)
           : null,
+      conversationWavPath: sessionDir && summary.recordings.playback
+          ? path.join(sessionDir, summary.recordings.playback)
+          : sessionDir && summary.recordings.talk
+              ? path.join(sessionDir, summary.recordings.talk)
+              : null,
       callerAudioTranscriptPath,
+      diarizedTranscriptPath,
+      diarizedTranscriptJsonPath,
     }).then(async (processed) => {
       const clean = String(processed || '').trim();
       if (!clean) throw new Error('processed log is empty');

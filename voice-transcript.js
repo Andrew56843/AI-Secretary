@@ -84,6 +84,141 @@ function parseTranscriptLine(line) {
   };
 }
 
+function formatTranscriptTimestamp(value) {
+  const seconds = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = (seconds % 60).toFixed(1).padStart(4, '0');
+  return `${String(minutes).padStart(2, '0')}:${remainder}`;
+}
+
+function formatDiarizedTranscript(segments, rawLog) {
+  const validSegments = Array.isArray(segments)
+      ? segments.filter((segment) => segment && String(segment.text || '').trim() && segment.speaker)
+      : [];
+  const assistantReference = String(rawLog || '')
+      .split(/\r?\n/)
+      .map(parseTranscriptLine)
+      .filter((turn) => turn?.role === 'assistant' && turn.text)
+      .map((turn) => turn.text)
+      .join(' ');
+  const speakerTexts = new Map();
+
+  for (const segment of validSegments) {
+    const speaker = String(segment.speaker);
+    speakerTexts.set(speaker, `${speakerTexts.get(speaker) || ''} ${String(segment.text).trim()}`.trim());
+  }
+
+  let assistantSpeaker = null;
+  let assistantScore = 0;
+  for (const [speaker, text] of speakerTexts) {
+    const score = spokenTextSimilarity(text, assistantReference);
+    if (score > assistantScore) {
+      assistantScore = score;
+      assistantSpeaker = speaker;
+    }
+  }
+
+  if (assistantScore < 0.25) {
+    assistantSpeaker = null;
+  }
+
+  const text = validSegments
+      .map((segment) => {
+        const speaker = String(segment.speaker);
+        const role = assistantSpeaker
+            ? speaker === assistantSpeaker ? 'Assi' : 'User'
+            : `Speaker ${speaker}`;
+        return `[${formatTranscriptTimestamp(segment.start)}-${formatTranscriptTimestamp(segment.end)}] ${role}: ${String(segment.text).trim()}`;
+      })
+      .join('\n');
+
+  return { text, assistantSpeaker, assistantScore };
+}
+
+function indexRawTranscript(rawLog) {
+  let assistantIndex = 0;
+  let userIndex = 0;
+  const assistantTurns = [];
+  const annotatedLines = [];
+
+  for (const line of String(rawLog || '').split(/\r?\n/)) {
+    const assistant = line.match(/^(?:Assi|Assistant):\s*(.*)$/i);
+    if (assistant) {
+      assistantIndex += 1;
+      const text = String(assistant[1] || '').trim();
+      assistantTurns.push(text);
+      annotatedLines.push(`A${assistantIndex}: ${text}`);
+      continue;
+    }
+
+    const user = line.match(/^User:\s*(.*)$/i);
+    if (user) {
+      userIndex += 1;
+      annotatedLines.push(`U${userIndex} (после A${assistantIndex}): ${String(user[1] || '').trim()}`);
+    }
+  }
+
+  return { assistantTurns, annotatedText: annotatedLines.join('\n') };
+}
+
+function transcriptEvidenceTokens(value) {
+  return normalizeTranscriptComparison(value)
+      .split(/\s+/)
+      .filter((token) => token.length > 1);
+}
+
+function buildCanonicalTranscript(rawLog, correctionText, callerEvidence = '') {
+  const indexed = indexRawTranscript(rawLog);
+  const parsed = JSON.parse(String(correctionText || ''));
+  if (!Array.isArray(parsed?.userTurns)) {
+    throw new Error('post-call correction has no userTurns array');
+  }
+
+  const userTurnsByAssistant = new Map();
+  for (const turn of parsed.userTurns) {
+    const afterAssistantIndex = Number(turn?.afterAssistantIndex);
+    const text = String(turn?.text || '')
+        .replace(/^(?:User|Assi|Assistant):\s*/i, '')
+        .trim();
+    if (!Number.isInteger(afterAssistantIndex) || afterAssistantIndex < 0 || afterAssistantIndex > indexed.assistantTurns.length || !text) {
+      throw new Error('post-call correction contains an invalid user turn');
+    }
+    const bucket = userTurnsByAssistant.get(afterAssistantIndex) || [];
+    bucket.push(text);
+    userTurnsByAssistant.set(afterAssistantIndex, bucket);
+  }
+
+  const lines = [];
+  for (const text of userTurnsByAssistant.get(0) || []) {
+    lines.push(`User: ${text}`);
+  }
+  indexed.assistantTurns.forEach((assistantText, index) => {
+    lines.push(`Assi: ${assistantText}`);
+    for (const text of userTurnsByAssistant.get(index + 1) || []) {
+      lines.push(`User: ${text}`);
+    }
+  });
+
+  if (lines.length === indexed.assistantTurns.length) {
+    throw new Error('post-call correction removed every caller turn');
+  }
+
+  const evidenceTokens = new Set(transcriptEvidenceTokens(callerEvidence));
+  if (evidenceTokens.size >= 4) {
+    const resultTokens = new Set(transcriptEvidenceTokens(
+      lines
+          .filter((line) => line.startsWith('User: '))
+          .join(' ')
+    ));
+    const matchedTokens = [...evidenceTokens].filter((token) => resultTokens.has(token)).length;
+    const coverage = matchedTokens / evidenceTokens.size;
+    if (coverage < 0.5) {
+      throw new Error(`post-call correction covers only ${Math.round(coverage * 100)}% of caller evidence`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function sanitizeRealtimeTranscript(rawLog, callInfo = {}) {
   const lines = String(rawLog || '').split(/\r?\n/);
   const parsed = lines.map(parseTranscriptLine);
@@ -137,7 +272,10 @@ function sanitizeRealtimeTranscript(rawLog, callInfo = {}) {
 }
 
 module.exports = {
+  buildCanonicalTranscript,
   findLikelyTranscriptionPromptLeak,
+  formatDiarizedTranscript,
+  indexRawTranscript,
   isLikelyAssistantEcho,
   normalizeTranscriptComparison,
   sanitizeRealtimeTranscript,

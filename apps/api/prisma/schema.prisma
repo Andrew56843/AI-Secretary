@@ -94,6 +94,7 @@ model ActiveCall {
 
 model CallLog {
   id               String           @id @default(cuid())
+  callUuid         String?          @unique
   assistantProfileId String
   direction        CallDirection
   customerPhone    String

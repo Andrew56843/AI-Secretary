@@ -7,6 +7,7 @@ import { env } from "../config.js";
 import { createBillableCallLog } from "../lib/billable-call.js";
 import {
   calendarActionInputSchema,
+  finalizeCalendarTranscriptForCall,
   maybeSyncCalendarFromCallLog,
   syncCalendarAction,
   type CalendarAutomationResult
@@ -346,13 +347,28 @@ async function finishOutboundContact(
 function scheduleCalendarAutomation(input: {
   userId: string;
   callLogId: string;
+  callUuid?: string | null;
   customerPhone: string;
   direction: CallDirection;
   transcript?: string | null;
   createdAt: Date;
   assistantPrompt?: string | null;
 }) {
-  void maybeSyncCalendarFromCallLog(input)
+  void (async () => {
+    const finalizedEvents = input.callUuid
+      ? await finalizeCalendarTranscriptForCall({
+          userId: input.userId,
+          callUuid: input.callUuid,
+          callLogId: input.callLogId,
+          customerPhone: input.customerPhone,
+          transcript: input.transcript ?? ""
+        })
+      : 0;
+    if (finalizedEvents > 0) {
+      return { status: "finalized", updatedEvents: finalizedEvents };
+    }
+    return maybeSyncCalendarFromCallLog(input);
+  })()
     .then((result) => {
       console.log("Google Calendar automation result", {
         callLogId: input.callLogId,
@@ -1021,6 +1037,7 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
     const result = await prisma.$transaction(
       async (tx) => {
         const log = await createBillableCallLog(tx, {
+          callUuid: payload.callUuid,
           assistantProfileId: profile.id,
           direction,
           customerPhone,
@@ -1045,6 +1062,7 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
       scheduleCalendarAutomation({
         userId: profile.userId,
         callLogId: result.log.id,
+        callUuid: payload.callUuid,
         customerPhone,
         direction,
         transcript: payload.transcript,
@@ -1067,6 +1085,10 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
     }
     if (error instanceof Error && error.message === "PROFILE_DIRECTION_MISMATCH") {
       res.status(409).json({ message: "Call direction does not match the assistant profile" });
+      return;
+    }
+    if (error instanceof Error && error.message === "CALL_UUID_COLLISION") {
+      res.status(409).json({ message: "Call UUID belongs to another profile or direction" });
       return;
     }
     throw error;

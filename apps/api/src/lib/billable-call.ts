@@ -10,6 +10,7 @@ import { createBalanceLedgerEntry } from "./balance-ledger.js";
 import { rublesToKopecks } from "./money.js";
 
 type BillableCallInput = {
+  callUuid?: string;
   assistantProfileId: string;
   direction: CallDirection;
   customerPhone: string;
@@ -74,6 +75,19 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     throw new Error("PROFILE_DIRECTION_MISMATCH");
   }
 
+  if (input.callUuid) {
+    const existing = await tx.callLog.findUnique({
+      where: { callUuid: input.callUuid },
+      include: { transcriptDeliveries: true }
+    });
+    if (existing) {
+      if (existing.assistantProfileId !== profile.id || existing.direction !== input.direction) {
+        throw new Error("CALL_UUID_COLLISION");
+      }
+      return existing;
+    }
+  }
+
   const directionRates = MODEL_RATES_RUB_PER_MINUTE[input.direction];
   const realtimeModel = directionRates[profile.realtimeModel]
     ? profile.realtimeModel
@@ -85,11 +99,15 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
     userId: profile.userId,
     type: BillingTransactionType.CALL_CHARGE,
     amountKopecks: -amountKopecks,
-    note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`
+    note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`,
+    // A call that started with a positive balance must always be logged and billed in full.
+    // The negative balance then prevents the next inbound or outbound call at resolution time.
+    allowNegativeBalance: true
   });
 
   const log = await tx.callLog.create({
     data: {
+      callUuid: input.callUuid,
       assistantProfileId: profile.id,
       direction: input.direction,
       customerPhone: input.customerPhone,

@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildCanonicalTranscript,
   findLikelyTranscriptionPromptLeak,
+  formatDiarizedTranscript,
   sanitizeRealtimeTranscript,
 } = require('../voice-transcript');
 
@@ -58,4 +60,100 @@ test('keeps caller intent that resembles a later assistant confirmation', () => 
 
   assert.equal(result.suppressed.length, 0);
   assert.match(result.text, /User: Отмените запись на 11:45\./);
+});
+
+test('maps diarized speakers to exact assistant and caller roles', () => {
+  const rawLog = [
+    'Assi: Здравствуйте! Я секретарь салона. Хотите записаться?',
+    'User: Да, хочу.',
+    'Assi: На какое время вас записать?',
+    'User: На восемнадцать часов.'
+  ].join('\n');
+  const diarized = formatDiarizedTranscript([
+    { start: 0, end: 3.2, speaker: 'A', text: 'Здравствуйте, я секретарь салона, хотите записаться?' },
+    { start: 3.5, end: 4.1, speaker: 'B', text: 'Да, хочу.' },
+    { start: 4.4, end: 6.2, speaker: 'A', text: 'На какое время вас записать?' },
+    { start: 6.5, end: 7.8, speaker: 'B', text: 'На восемнадцать часов.' }
+  ], rawLog);
+
+  assert.equal(diarized.assistantSpeaker, 'A');
+  assert.ok(diarized.assistantScore > 0.7);
+  assert.match(diarized.text, /Assi: Здравствуйте/);
+  assert.match(diarized.text, /User: Да, хочу\./);
+  assert.match(diarized.text, /\[00:06\.5-00:07\.8\]/);
+});
+
+test('builds the final transcript without allowing assistant text to be rewritten', () => {
+  const rawLog = [
+    'Assi: Назовите точное время.',
+    'User: На пятнадцать.',
+    'Assi: Запись сделана на 15:30.',
+    'User: Нет, я сказал девятнадцать ноль ноль.',
+    'Assi: Хотите перенести запись?',
+    'User: Тогда на восемнадцать.'
+  ].join('\n');
+  const correction = JSON.stringify({
+    userTurns: [
+      { afterAssistantIndex: 1, text: 'На 19:00.' },
+      { afterAssistantIndex: 2, text: 'Нет, я сказал 19:00.' },
+      { afterAssistantIndex: 3, text: 'Тогда на 18:00.' }
+    ]
+  });
+
+  const result = buildCanonicalTranscript(rawLog, correction);
+
+  assert.match(result, /^Assi: Назовите точное время\./);
+  assert.match(result, /Assi: Запись сделана на 15:30\./);
+  assert.match(result, /User: Нет, я сказал 19:00\./);
+  assert.equal(result.match(/^Assi:/gm)?.length, 3);
+  assert.equal(result.match(/^User:/gm)?.length, 3);
+});
+
+test('rejects a correction that removes every caller turn', () => {
+  assert.throws(
+      () => buildCanonicalTranscript('Assi: Здравствуйте.\nUser: Алло.', '{"userTurns":[]}'),
+      /removed every caller turn/
+  );
+});
+
+test('rejects a correction that drops most of the caller-only evidence', () => {
+  const rawLog = [
+    'Assi: Как вас зовут?',
+    'User: Добрый.',
+    'Assi: На какое время?',
+    'User: На пятнадцать.'
+  ].join('\n');
+  const correction = JSON.stringify({
+    userTurns: [{ afterAssistantIndex: 1, text: 'Андрей.' }]
+  });
+
+  assert.throws(
+      () => buildCanonicalTranscript(
+        rawLog,
+        correction,
+        'Андрей. Я сказал девятнадцать ноль ноль. Тогда давайте на восемнадцать ноль ноль.'
+      ),
+      /covers only/
+  );
+});
+
+test('accepts a complete correction when spoken time is normalized to digits', () => {
+  const rawLog = [
+    'Assi: Как вас зовут?',
+    'User: Добрый.',
+    'Assi: На какое время?',
+    'User: На пятнадцать.'
+  ].join('\n');
+  const correction = JSON.stringify({
+    userTurns: [
+      { afterAssistantIndex: 1, text: 'Меня зовут Андрей.' },
+      { afterAssistantIndex: 2, text: 'Я сказал на 19:00, давайте на 18:00.' }
+    ]
+  });
+
+  assert.doesNotThrow(() => buildCanonicalTranscript(
+    rawLog,
+    correction,
+    'Меня зовут Андрей. Я сказал девятнадцать ноль ноль, давайте на восемнадцать ноль ноль.'
+  ));
 });
