@@ -1944,9 +1944,7 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
                 <strong>Андрей</strong>
               </div>
               <p className="sbp-note">
-                После перевода отправьте чек и телефон вашего аккаунта в Telegram
-                {" "}
-                <a href="https://t.me/Drunlet" target="_blank" rel="noreferrer">@Drunlet</a>, чтобы зачислить деньги на баланс.
+                Зачисление выполняется автоматически.
               </p>
             </section>
 
