@@ -26,14 +26,12 @@ Callsec should not accept paid customers until every required item below is veri
 - Confirm two different accounts cannot read or modify each other's profiles, recordings, contacts, billing, or integrations.
 - Move rate-limit state to Redis before running more than one API replica.
 
-## Payments
+## Balance Top-ups
 
-- Sign a merchant agreement with an internet-acquiring provider; CloudTips must not be used to sell the service.
-- Set `CLOUDPAYMENTS_PUBLIC_ID`, `CLOUDPAYMENTS_API_SECRET`, and `CLOUDPAYMENTS_OFFER_URL`.
-- Configure the Check, Pay, Fail, and Refund webhook URLs from the README as HTTPS POST notifications.
-- Run provider test payments, duplicate webhook delivery, wrong-amount rejection, failed payment, and full refund.
-- Configure online receipts and tax details required for the legal entity and applicable version of 54-FZ.
-- Reconcile provider reports against `PaymentOrder` and `BillingTransaction` records.
+- Verify each SBP transfer before recording an administrative balance adjustment.
+- Store the transfer receipt and the account phone used for matching outside public application logs.
+- Reconcile bank statements against `BillingTransaction` administrative adjustments.
+- Review fiscal receipt and tax requirements with a qualified specialist before accepting production payments.
 
 ## Telephony And AI
 

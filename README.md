@@ -64,20 +64,9 @@ Create production secrets independently. In particular, do not reuse `JWT_SECRET
 
 See [docs/PRODUCTION_CHECKLIST.md](docs/PRODUCTION_CHECKLIST.md) before accepting customers.
 
-## Payments
+## Balance Top-ups
 
-Balance top-ups use CloudPayments orders, not CloudTips. The API creates a local `PaymentOrder`; money is credited only after a signed `Pay` webhook with matching order, account, currency, and amount. Duplicate notifications are idempotent. Full refund notifications reverse the balance entry.
-
-Required webhook URLs:
-
-```text
-https://callsec.ru/api/billing/webhooks/cloudpayments/check
-https://callsec.ru/api/billing/webhooks/cloudpayments/pay
-https://callsec.ru/api/billing/webhooks/cloudpayments/fail
-https://callsec.ru/api/billing/webhooks/cloudpayments/refund
-```
-
-Without `CLOUDPAYMENTS_PUBLIC_ID` and `CLOUDPAYMENTS_API_SECRET`, top-up returns `503` and never pretends that a payment succeeded.
+The dashboard shows manual SBP transfer details for Sber Bank. There is intentionally no payment-provider API or automatic crediting endpoint. An administrator verifies the transfer and records the corresponding balance adjustment.
 
 ## Tenant Isolation
 

@@ -179,10 +179,6 @@ export type BillingState = {
   transactions: BillingTransaction[];
 };
 
-export type PaymentTopUp = {
-  paymentUrl: string;
-};
-
 export type GoogleIntegration = {
   status: "DISCONNECTED" | "CONNECTED";
   googleEmail?: string | null;

@@ -1,8 +1,7 @@
-import { BillingTransactionType, CallDirection, PaymentOrderStatus, Prisma } from "@prisma/client";
+import { BillingTransactionType, CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
-import { createCloudPaymentsOrder, isCloudPaymentsConfigured } from "../lib/cloudpayments.js";
-import { kopecksToRubles, rublesToKopecks } from "../lib/money.js";
+import { kopecksToRubles } from "../lib/money.js";
 import {
   canRenewNumber,
   getNumberRentDaysLeft,
@@ -21,10 +20,6 @@ const BILLING_HISTORY_TYPES = [
   BillingTransactionType.TOP_UP,
   BillingTransactionType.PAYMENT_REFUND
 ];
-
-const topUpSchema = z.object({
-  amountRub: z.number().int().min(100).max(500000)
-});
 
 const historyQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -120,54 +115,6 @@ billingRouter.get("/charges", requireAuth, async (req, res) => {
   });
 
   res.json({ transactions: transactions.map(serializeBillingTransaction), pagination });
-});
-
-billingRouter.post("/top-up", requireAuth, async (req, res) => {
-  const parsed = topUpSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
-    return;
-  }
-
-  const amountRub = parsed.data.amountRub;
-  if (!isCloudPaymentsConfigured()) {
-    res.status(503).json({ message: "Online payments are temporarily unavailable" });
-    return;
-  }
-
-  const user = await prisma.user.findUniqueOrThrow({
-    where: { id: req.user!.userId },
-    select: { id: true, phone: true }
-  });
-  const order = await prisma.paymentOrder.create({
-    data: {
-      userId: user.id,
-      amountKopecks: rublesToKopecks(amountRub)
-    }
-  });
-
-  let payment;
-  try {
-    payment = await createCloudPaymentsOrder({
-      orderId: order.id,
-      userId: user.id,
-      phone: user.phone,
-      amountKopecks: order.amountKopecks
-    });
-  } catch (error) {
-    await prisma.paymentOrder.update({
-      where: { id: order.id },
-      data: { status: PaymentOrderStatus.FAILED }
-    });
-    console.error("CloudPayments order creation failed", { orderId: order.id, error });
-    res.status(502).json({ message: "Could not create a payment. Please try again later." });
-    return;
-  }
-
-  res.status(201).json({
-    billing: await getBillingState(req.user!.userId),
-    payment
-  });
 });
 
 billingRouter.post("/number-rental", requireAuth, async (req, res) => {

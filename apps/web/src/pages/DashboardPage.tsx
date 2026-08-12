@@ -23,7 +23,6 @@ import {
   rentPhoneNumber,
   saveContactName,
   saveProfile,
-  topUpBalance,
   updateMyTimeZone
 } from "../lib/api";
 import type {
@@ -126,6 +125,8 @@ const OUTBOUND_CONTACTS_PAGE_SIZE = 5;
 const BILLING_HISTORY_PAGE_SIZE = 5;
 const CALL_LOGS_PAGE_SIZE = 4;
 const VOICE_PREVIEW_PATH = "/voice-previews";
+const SBP_PHONE = "+79054176285";
+const SBP_PHONE_DISPLAY = "+7 905 417 62 85";
 
 const REALTIME_MODEL_OPTIONS: RealtimeModelOption[] = [
   {
@@ -712,10 +713,8 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
   const [saving, setSaving] = useState(false);
   const [promptApplying, setPromptApplying] = useState(false);
   const [testingCall, setTestingCall] = useState(false);
-  const [topUpSaving, setTopUpSaving] = useState(false);
   const [numberRentalSaving, setNumberRentalSaving] = useState(false);
   const [telegramToggling, setTelegramToggling] = useState(false);
-  const [topUpAmount, setTopUpAmount] = useState("1000");
   const [previewingVoice, setPreviewingVoice] = useState<RealtimeVoice | null>(null);
   const [form, setForm] = useState<ProfileForm>(() => defaultForm("inbound"));
   const [promptEditHistoryByMode, setPromptEditHistoryByMode] = useState<Record<UiMode, PromptEditHistoryItem[]>>({
@@ -1019,36 +1018,6 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
     }
   }
 
-  async function handleTopUpBalance(event: FormEvent) {
-    event.preventDefault();
-    const amountRub = Number(topUpAmount);
-    setError(null);
-    setNotice(null);
-
-    if (!Number.isFinite(amountRub) || !Number.isInteger(amountRub) || amountRub < 100) {
-      setError("Введите целую сумму от 100 ₽");
-      return;
-    }
-
-    setTopUpSaving(true);
-
-    try {
-      const response = await topUpBalance(token, { amountRub });
-      setBilling(response.billing);
-      if (response.payment?.paymentUrl) {
-        setNotice("Открываю страницу оплаты...");
-        window.location.assign(response.payment.paymentUrl);
-        return;
-      }
-
-      setError("Платёжная ссылка не получена. Попробуйте ещё раз.");
-    } catch (topUpError) {
-      setError(topUpError instanceof Error ? topUpError.message : "Не удалось пополнить баланс");
-    } finally {
-      setTopUpSaving(false);
-    }
-  }
-
   async function handleRentPhoneNumber() {
     setError(null);
     setNotice(null);
@@ -1075,6 +1044,16 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
     try {
       await navigator.clipboard.writeText(reservedNumber);
       setNotice("Номер AI-секретаря скопирован");
+      setError(null);
+    } catch {
+      setError("Не удалось скопировать номер автоматически");
+    }
+  }
+
+  async function handleCopySbpPhone() {
+    try {
+      await navigator.clipboard.writeText(SBP_PHONE);
+      setNotice("Номер для перевода по СБП скопирован");
       setError(null);
     } catch {
       setError("Не удалось скопировать номер автоматически");
@@ -1949,23 +1928,27 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
               </button>
             </div>
 
-            <form className="top-up-form" onSubmit={handleTopUpBalance}>
-              <label>
-                Сумма пополнения, ₽
-                <input
-                  type="number"
-                  min={100}
-                  step={100}
-                  value={topUpAmount}
-                  onChange={(event) => setTopUpAmount(event.target.value)}
-                  placeholder="1000"
-                  required
-                />
-              </label>
-              <button type="submit" disabled={topUpSaving}>
-                {topUpSaving ? "Пополняю..." : "Пополнить баланс"}
-              </button>
-            </form>
+            <section className="sbp-top-up" aria-label="Пополнение по СБП">
+              <div>
+                <p className="eyebrow">СБП · Сбер Банк</p>
+                <h3>Перевод по номеру телефона</h3>
+                <p className="hint">Онлайн-оплаты на сайте нет. Баланс пополняется переводом по СБП.</p>
+              </div>
+              <div className="sbp-details">
+                <span>Номер телефона</span>
+                <a href={`tel:${SBP_PHONE}`}>{SBP_PHONE_DISPLAY}</a>
+                <button className="outline-btn small-btn" type="button" onClick={() => void handleCopySbpPhone()}>
+                  Копировать
+                </button>
+                <span>Получатель</span>
+                <strong>Андрей</strong>
+              </div>
+              <p className="sbp-note">
+                После перевода отправьте чек и телефон вашего аккаунта в Telegram
+                {" "}
+                <a href="https://t.me/Drunlet" target="_blank" rel="noreferrer">@Drunlet</a>, чтобы зачислить деньги на баланс.
+              </p>
+            </section>
 
             <section className="number-rental-card">
               <div>

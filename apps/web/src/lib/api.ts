@@ -13,7 +13,6 @@ import type {
   OutboundContact,
   OutboundPagination,
   OutboundStats,
-  PaymentTopUp,
   PhoneContactName,
   PhoneVerificationCompleteResponse,
   PhoneVerificationStartResponse,
@@ -161,14 +160,6 @@ export function getBillingCharges(token: string, params: { page?: number; pageSi
   const suffix = serializedQuery ? `?${serializedQuery}` : "";
   return request<{ transactions: BillingTransaction[]; pagination: BillingPagination }>(`/api/billing/charges${suffix}`, {
     token
-  });
-}
-
-export function topUpBalance(token: string, payload: { amountRub: number }) {
-  return request<{ billing: BillingState; payment?: PaymentTopUp }>("/api/billing/top-up", {
-    token,
-    method: "POST",
-    body: payload
   });
 }
 

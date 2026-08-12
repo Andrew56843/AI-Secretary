@@ -12,7 +12,6 @@ import { callsRouter } from "./routes/calls.js";
 import { contactNamesRouter } from "./routes/contact-names.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { outboundRouter } from "./routes/outbound.js";
-import { paymentWebhooksRouter } from "./routes/payment-webhooks.js";
 import { profilesRouter } from "./routes/profiles.js";
 import { voiceInternalRouter } from "./routes/voice-internal.js";
 
@@ -34,7 +33,6 @@ app.use(
     credentials: true
   })
 );
-app.use("/api/billing/webhooks/cloudpayments", paymentWebhooksRouter);
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/healthz", async (_req, res) => {

@@ -2,6 +2,7 @@ import { CallDirection, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
+import { createGreetingAudioCacheKey, generateGreetingAudioPcm24 } from "../lib/greeting-audio.js";
 import { OpenAiRequestError, postOpenAiJson } from "../lib/openai.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -252,6 +253,37 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
   const mode = parsedMode.data;
   const payload = parsed.data;
   const userId = req.user!.userId;
+  const existingAudio = await prisma.assistantProfile.findUnique({
+    where: { userId_mode: { userId, mode } },
+    select: {
+      voice: true,
+      greetingAudioCache: {
+        select: { cacheKey: true }
+      }
+    }
+  });
+  const effectiveVoice = payload.voice ?? existingAudio?.voice ?? "alloy";
+  const effectiveCacheKey = createGreetingAudioCacheKey(payload.greetingText, effectiveVoice);
+  let generatedGreetingAudio: Awaited<ReturnType<typeof generateGreetingAudioPcm24>> | null = null;
+
+  if (existingAudio?.greetingAudioCache?.cacheKey !== effectiveCacheKey) {
+    try {
+      generatedGreetingAudio = await generateGreetingAudioPcm24(payload.greetingText, effectiveVoice);
+    } catch (error) {
+      if (error instanceof OpenAiRequestError && error.status === 503) {
+        res.status(503).json({ message: "OPENAI_API_KEY не настроен для создания приветствия" });
+        return;
+      }
+      console.error("Greeting audio generation failed", {
+        userId,
+        mode,
+        status: error instanceof OpenAiRequestError ? error.status : undefined,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      res.status(502).json({ message: "Не удалось создать аудиодорожку приветствия. Повторите сохранение." });
+      return;
+    }
+  }
 
   const profile = await prisma.$transaction(
     async (tx) => {
@@ -263,7 +295,7 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
       if (!existing) {
         const forwardingRules = resolveForwardingRules(payload);
 
-        return tx.assistantProfile.create({
+        const created = await tx.assistantProfile.create({
           data: {
             userId,
             mode,
@@ -274,16 +306,26 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
             forwardingPhone: user.phone,
             ...forwardingRules,
             realtimeModel: payload.realtimeModel ?? "gpt-realtime-2",
-            voice: payload.voice ?? "alloy",
+            voice: effectiveVoice,
             maxDialogSeconds: payload.maxDialogSeconds
           },
           include: includeProfileRelations()
         });
+
+        if (generatedGreetingAudio) {
+          await tx.greetingAudioCache.create({
+            data: {
+              assistantProfileId: created.id,
+              ...generatedGreetingAudio
+            }
+          });
+        }
+        return created;
       }
 
       const forwardingRules = resolveForwardingRules(payload, existing);
 
-      return tx.assistantProfile.update({
+      const updated = await tx.assistantProfile.update({
         where: { id: existing.id },
         data: {
           title: payload.title,
@@ -293,11 +335,23 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
           forwardingPhone: user.phone,
           ...forwardingRules,
           ...(payload.realtimeModel !== undefined ? { realtimeModel: payload.realtimeModel } : {}),
-          ...(payload.voice !== undefined ? { voice: payload.voice } : {}),
+          voice: effectiveVoice,
           maxDialogSeconds: payload.maxDialogSeconds
         },
         include: includeProfileRelations()
       });
+
+      if (generatedGreetingAudio) {
+        await tx.greetingAudioCache.upsert({
+          where: { assistantProfileId: updated.id },
+          create: {
+            assistantProfileId: updated.id,
+            ...generatedGreetingAudio
+          },
+          update: generatedGreetingAudio
+        });
+      }
+      return updated;
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );

@@ -34,7 +34,7 @@ export class OpenAiRequestError extends Error {
   }
 }
 
-export async function postOpenAiJson<T extends JsonObject>(path: string, payload: JsonObject): Promise<T> {
+async function postOpenAiRaw(path: string, payload: JsonObject) {
   if (!env.OPENAI_API_KEY) {
     throw new OpenAiRequestError("OPENAI_API_KEY is not configured", 503);
   }
@@ -47,7 +47,7 @@ export async function postOpenAiJson<T extends JsonObject>(path: string, payload
   const agent = proxyUrl ? createProxyAgent(proxyUrl) : undefined;
   const transport = url.protocol === "http:" ? http : https;
 
-  return new Promise<T>((resolve, reject) => {
+  return new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
       url,
       {
@@ -64,15 +64,20 @@ export async function postOpenAiJson<T extends JsonObject>(path: string, payload
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("end", () => {
-          const responseText = Buffer.concat(chunks).toString("utf8");
-          const responsePayload = parseJsonBody(responseText);
+          const responseBody = Buffer.concat(chunks);
 
           if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new OpenAiRequestError("OpenAI request failed", response.statusCode, responsePayload));
+            reject(
+              new OpenAiRequestError(
+                "OpenAI request failed",
+                response.statusCode,
+                parseJsonBody(responseBody.toString("utf8"))
+              )
+            );
             return;
           }
 
-          resolve(responsePayload as T);
+          resolve(responseBody);
         });
       }
     );
@@ -84,4 +89,13 @@ export async function postOpenAiJson<T extends JsonObject>(path: string, payload
     request.write(body);
     request.end();
   });
+}
+
+export async function postOpenAiJson<T extends JsonObject>(path: string, payload: JsonObject): Promise<T> {
+  const responseBody = await postOpenAiRaw(path, payload);
+  return parseJsonBody(responseBody.toString("utf8")) as T;
+}
+
+export function postOpenAiBinary(path: string, payload: JsonObject) {
+  return postOpenAiRaw(path, payload);
 }

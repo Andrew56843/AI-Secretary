@@ -31,7 +31,6 @@ model User {
   transcriptDeliveries  TranscriptDelivery[]
   phoneContactNames     PhoneContactName[]
   activeCalls           ActiveCall[]
-  paymentOrders         PaymentOrder[]
 }
 
 model ReservedPhoneNumber {
@@ -68,10 +67,26 @@ model AssistantProfile {
   reservedNumber   ReservedPhoneNumber? @relation(fields: [reservedNumberId], references: [id])
   callLogs         CallLog[]
   activeCalls      ActiveCall[]
+  greetingAudioCache GreetingAudioCache?
 
   @@unique([userId, mode])
   @@index([userId])
   @@index([reservedNumberId])
+}
+
+model GreetingAudioCache {
+  id                 String           @id @default(cuid())
+  assistantProfileId String           @unique
+  cacheKey           String
+  voice              String
+  model              String
+  pcm24              Bytes
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  assistantProfile   AssistantProfile @relation(fields: [assistantProfileId], references: [id], onDelete: Cascade)
+
+  @@index([cacheKey])
 }
 
 model ActiveCall {
@@ -146,24 +161,6 @@ model BillingTransaction {
   user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
-}
-
-model PaymentOrder {
-  id                    String             @id @default(cuid())
-  userId                String
-  provider              String             @default("CLOUDPAYMENTS")
-  providerTransactionId String?            @unique
-  amountKopecks         Int
-  status                PaymentOrderStatus @default(PENDING)
-  paidAt                DateTime?
-  refundedAt            DateTime?
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-
-  user                  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, createdAt])
-  @@index([status, createdAt])
 }
 
 model GoogleAccount {
@@ -289,13 +286,6 @@ enum BillingTransactionType {
   CALL_CHARGE
   ADMIN_ADJUSTMENT
   PAYMENT_REFUND
-}
-
-enum PaymentOrderStatus {
-  PENDING
-  SUCCEEDED
-  FAILED
-  REFUNDED
 }
 
 enum IntegrationStatus {

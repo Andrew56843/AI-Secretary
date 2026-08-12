@@ -1004,7 +1004,16 @@ function createPlaybackWavFromStereo(stereoPath, playbackPath, options = {}) {
 // ---------- JSON / files ----------
 
 function writeJson(filePath, obj) {
-  fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), 'utf8');
+  fs.writeFileSync(
+      filePath,
+      JSON.stringify(obj, (key, value) => {
+        if (key === 'pcm24Base64' && typeof value === 'string') {
+          return `[cached audio omitted: ${value.length} base64 chars]`;
+        }
+        return value;
+      }, 2),
+      'utf8'
+  );
 }
 
 function appendJsonl(filePath, obj) {
@@ -1337,6 +1346,8 @@ function baseVoiceConfig() {
     voice: CONFIG.defaultVoice,
     autoGreeting: CONFIG.autoGreeting,
     greetingText: 'Коротко поприветствуй звонящего по-русски и спроси, чем помочь.',
+    greetingInstruction: '',
+    greetingAudio: null,
     instructions:
         'Ты телефонный AI-секретарь. Всегда отвечай только по-русски. ' +
         'Говори кратко и по делу. Это платный телефонный звонок: береги секунды клиента. ' +
@@ -1993,8 +2004,14 @@ function buildSessionUpdate(clientCfg, callMeta) {
           ? `\n- Это исходящий звонок. Номер клиента, которому звоним: ${callerNumber}${contactName ? `. Имя контакта: ${contactName}` : ''}.`
           : `\n- Номер телефона, с которого звонят: ${callerNumber}. Используй его как внутренний факт для записи. Не диктуй его по цифрам без прямой просьбы клиента; для подтверждения спроси: "Подтверждаете номер, с которого звоните?"`
       : '';
+  const cachedGreetingWasPlayed = clientCfg?.greetingAudioPlayed === true;
   const directionInstruction = direction === 'OUTBOUND'
-      ? 'Это исходящий звонок от AI-секретаря. Сначала коротко представься по greetingText, уточни, удобно ли говорить, затем действуй по сценарию пользователя. Не говори, что клиент сам позвонил.'
+      ? cachedGreetingWasPlayed
+          ? 'Это исходящий звонок от AI-секретаря. Приветствие уже было воспроизведено. Не повторяй его; после ответа клиента уточни, удобно ли говорить, затем действуй по сценарию пользователя. Не говори, что клиент сам позвонил.'
+          : 'Это исходящий звонок от AI-секретаря. Сначала коротко представься по greetingText, уточни, удобно ли говорить, затем действуй по сценарию пользователя. Не говори, что клиент сам позвонил.'
+      : '';
+  const greetingInstruction = cachedGreetingWasPlayed
+      ? `Приветствие уже воспроизведено дословно: "${clientCfg.greetingText}". Не произноси его повторно и продолжай с первой реплики клиента.`
       : '';
   const runtimeInstructions = [
     clientCfg.instructions,
@@ -2002,6 +2019,7 @@ function buildSessionUpdate(clientCfg, callMeta) {
     buildCalendarToolInstruction(clientCfg),
     buildVoicePersonaInstruction(clientCfg.voice),
     directionInstruction,
+    greetingInstruction,
     callerInstruction.trim(),
   ].filter(Boolean).join('\n\n');
   const inputTranscription = {
@@ -2172,7 +2190,11 @@ function buildGreetingResponse(clientCfg) {
   return {
     type: 'response.create',
     response: {
-      instructions: clientCfg.greetingText,
+      instructions: clientCfg.greetingInstruction || [
+        'Say exactly and completely only this phrase.',
+        'Do not rephrase, shorten, add greetings, comments or extra words:',
+        clientCfg.greetingText,
+      ].join(' '),
       max_output_tokens: clientCfg.maxResponseOutputTokens,
     },
   };
@@ -2237,6 +2259,9 @@ const audioServer = net.createServer((socket) => {
 
   let pendingAssistantTranscript = '';
   let greetingSent = false;
+  let cachedGreetingPlayed = false;
+  let preSessionInputPcm24 = [];
+  let preSessionInputBytes = 0;
   let voiceConfirmationAttempts = 0;
   let suppressNextEchoResponse = false;
   const assistantTranscriptHistory = [];
@@ -2248,6 +2273,7 @@ const audioServer = net.createServer((socket) => {
   const functionCallNames = new Map();
 
   const downsample24to8 = createDownsampler24kTo8k();
+  const MAX_PRE_SESSION_INPUT_BYTES = CONFIG.modelSampleRate * 2 * 5;
 
   const summary = {
     connId,
@@ -2296,6 +2322,7 @@ const audioServer = net.createServer((socket) => {
     },
     openaiUsage: [],
     closeReason: null,
+    greetingSource: null,
   };
 
   function redirectCallToMobile(reason = 'manual') {
@@ -2758,6 +2785,74 @@ const audioServer = net.createServer((socket) => {
     }
   }
 
+  function playCachedGreeting() {
+    const greetingAudio = clientCfg?.greetingAudio;
+    if (!clientCfg.autoGreeting || !greetingAudio?.pcm24Base64) return false;
+
+    const encoding = String(greetingAudio.encoding || '').toLowerCase();
+    const sampleRate = Number(greetingAudio.sampleRate);
+    const cachedVoice = String(greetingAudio.voice || '').trim().toLowerCase();
+    const selectedVoice = String(clientCfg.voice || '').trim().toLowerCase();
+
+    if (encoding !== 'pcm_s16le' || sampleRate !== CONFIG.modelSampleRate) {
+      logErr('[GREETING]', `unsupported cached audio ${encoding || '-'}@${sampleRate || 0}`);
+      return false;
+    }
+    if (cachedVoice && selectedVoice && cachedVoice !== selectedVoice) {
+      logErr('[GREETING]', `cached voice mismatch cached=${cachedVoice} selected=${selectedVoice}`);
+      return false;
+    }
+
+    let pcm24;
+    try {
+      pcm24 = Buffer.from(String(greetingAudio.pcm24Base64), 'base64');
+    } catch (err) {
+      logErr('[GREETING]', `invalid base64: ${err.message}`);
+      return false;
+    }
+
+    if (pcm24.length < 2 || pcm24.length % 2 !== 0 || pcm24.length > 4_800_000) {
+      logErr('[GREETING]', `invalid PCM size=${pcm24.length}`);
+      return false;
+    }
+
+    const downsampleGreeting = createDownsampler24kTo8k();
+    const pcm8 = downsampleGreeting(pcm24);
+    if (!pcm8.length) return false;
+
+    greetingSent = true;
+    cachedGreetingPlayed = true;
+    clientCfg.greetingAudioPlayed = true;
+    summary.greetingSource = 'cached_tts';
+    commitAssistantTranscript(clientCfg.greetingText, { source: 'cached_greeting' });
+    queuePcm8ToAsterisk(pcm8);
+    flushOutboundTail();
+    log('[GREETING]', `cached greeting queued voice=${selectedVoice || '-'} pcm24=${pcm24.length} pcm8=${pcm8.length}`);
+    return true;
+  }
+
+  function bufferInputUntilSessionReady(pcm24) {
+    if (!cachedGreetingPlayed || !pcm24?.length || preSessionInputBytes >= MAX_PRE_SESSION_INPUT_BYTES) return;
+    const remaining = MAX_PRE_SESSION_INPUT_BYTES - preSessionInputBytes;
+    const chunk = pcm24.length > remaining ? pcm24.subarray(0, remaining) : pcm24;
+    preSessionInputPcm24.push(Buffer.from(chunk));
+    preSessionInputBytes += chunk.length;
+  }
+
+  function flushPreSessionInput() {
+    if (!sessionReady || !preSessionInputPcm24.length) return;
+    for (const pcm24 of preSessionInputPcm24) {
+      summary.pcm24BytesToOpenAI += pcm24.length;
+      safeWsSend({
+        type: 'input_audio_buffer.append',
+        audio: pcm24.toString('base64'),
+      });
+    }
+    log('[PCM-IN]', `flushed ${preSessionInputBytes} buffered bytes after session ready`);
+    preSessionInputPcm24 = [];
+    preSessionInputBytes = 0;
+  }
+
   function pumpOutbound() {
     if (closed || outboundPumping) return;
     if (!outboundQueue.length) return;
@@ -3077,6 +3172,7 @@ const audioServer = net.createServer((socket) => {
             sessionReady = true;
             if (handshakeTimer) clearTimeout(handshakeTimer);
             log('[OA]', `session.updated voice=${confirmedVoice || 'unreported'} requested=${requestedVoice || 'default'}`);
+            flushPreSessionInput();
             persistMeta();
 
             if (clientCfg.autoGreeting && !greetingSent) {
@@ -3380,6 +3476,7 @@ const audioServer = net.createServer((socket) => {
         }
 
         persistMeta();
+        playCachedGreeting();
         openRealtime();
         continue;
       }
@@ -3396,14 +3493,16 @@ const audioServer = net.createServer((socket) => {
           log('[PCM-IN]', `bytes=${payload.length} mean_abs=${level}`);
         }
 
+        const inputPcm8 = applyPcm16Gain(payload, CONFIG.inputPcmGain);
+        const pcm24 = upsample8kTo24k(inputPcm8);
         if (ws && ws.readyState === WebSocket.OPEN && sessionReady) {
-          const inputPcm8 = applyPcm16Gain(payload, CONFIG.inputPcmGain);
-          const pcm24 = upsample8kTo24k(inputPcm8);
           summary.pcm24BytesToOpenAI += pcm24.length;
           safeWsSend({
             type: 'input_audio_buffer.append',
             audio: pcm24.toString('base64'),
           });
+        } else {
+          bufferInputUntilSessionReady(pcm24);
         }
         continue;
       }

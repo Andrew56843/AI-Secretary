@@ -143,6 +143,7 @@ function mapProfileToVoiceConfig(
   profile: Prisma.AssistantProfileGetPayload<{
     include: {
       reservedNumber: true;
+      greetingAudioCache: true;
       user: {
         select: {
           id: true;
@@ -193,7 +194,17 @@ function mapProfileToVoiceConfig(
     voice: profile.voice,
     realtimeModel: profile.realtimeModel,
     autoGreeting: true,
-    greetingText: createExactGreetingInstruction(profile.greetingText),
+    greetingText: profile.greetingText,
+    greetingInstruction: createExactGreetingInstruction(profile.greetingText),
+    greetingAudio: profile.greetingAudioCache
+      ? {
+          encoding: "pcm_s16le",
+          sampleRate: 24_000,
+          voice: profile.greetingAudioCache.voice,
+          model: profile.greetingAudioCache.model,
+          pcm24Base64: Buffer.from(profile.greetingAudioCache.pcm24).toString("base64")
+        }
+      : null,
     instructions: profile.prompt,
     transcriptionPrompt: createProfileTranscriptionPrompt(profile),
     forwardingEnabled: profile.forwardingEnabled,
@@ -401,6 +412,7 @@ async function findInboundProfileByDid(did: string) {
     },
     include: {
       reservedNumber: true,
+      greetingAudioCache: true,
       user: {
         select: {
           id: true,
@@ -438,6 +450,7 @@ async function findActiveProfileById(assistantProfileId: string, direction?: Cal
     },
     include: {
       reservedNumber: true,
+      greetingAudioCache: true,
       user: {
         select: {
           id: true,
@@ -900,6 +913,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
       where: { userId_mode: { userId: claimed.userId, mode: callMode } },
       include: {
         reservedNumber: true,
+        greetingAudioCache: true,
         user: {
           select: {
             id: true,
