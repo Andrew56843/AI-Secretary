@@ -37,7 +37,7 @@ const CONFIG = {
   metadataToken: process.env.METADATA_TOKEN || '',
   platformApiBaseUrl: process.env.PLATFORM_API_BASE_URL || '',
   voiceServiceToken: process.env.VOICE_SERVICE_TOKEN || '',
-  platformApiTimeoutMs: Number(process.env.PLATFORM_API_TIMEOUT_MS || 1500),
+  platformApiTimeoutMs: Number(process.env.PLATFORM_API_TIMEOUT_MS || 5000),
   calendarToolTimeoutMs: Number(process.env.CALENDAR_TOOL_TIMEOUT_MS || 12_000),
   outboundDialerEnabled: String(process.env.OUTBOUND_DIALER_ENABLED || 'false') === 'true',
   outboundDialerIntervalMs: Number(process.env.OUTBOUND_DIALER_INTERVAL_MS || 5000),
