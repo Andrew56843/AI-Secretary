@@ -1930,7 +1930,7 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
 
             <section className="sbp-top-up" aria-label="Пополнение по СБП">
               <div>
-                <p className="eyebrow">СБП · Сбер Банк</p>
+                <p className="eyebrow">СБП</p>
                 <h3>Перевод по номеру телефона</h3>
                 <p className="hint">Онлайн-оплаты на сайте нет. Баланс пополняется переводом по СБП.</p>
               </div>
@@ -1942,9 +1942,11 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
                 </button>
                 <span>Получатель</span>
                 <strong>Андрей</strong>
+                <span>Банк</span>
+                <strong>Сбербанк</strong>
               </div>
               <p className="sbp-note">
-                Зачисление выполняется автоматически.
+                Зачисление выполняется автоматически. Сумма пополнения = сумме перевода.
               </p>
             </section>
 
