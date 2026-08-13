@@ -21,6 +21,12 @@ const {
   sanitizeRealtimeTranscript,
   spokenTextSimilarity,
 } = require('./voice-transcript');
+const {
+  buildOutboundCallFile,
+  getOutboundCallerId,
+  getQueuedCallDirection,
+  normalizeDialPhone,
+} = require('./outbound-call');
 
 const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
 
@@ -46,7 +52,6 @@ const CONFIG = {
   outboundTrunk: process.env.OUTBOUND_TRUNK || 'PJSIP/novofon-endpoint/sip',
   outboundContext: process.env.OUTBOUND_CONTEXT || 'ai-outbound',
   outboundExtension: process.env.OUTBOUND_EXTENSION || 's',
-  outboundCallerId: process.env.OUTBOUND_CALLER_ID || '',
   asteriskOutgoingDir: DEFAULT_ASTERISK_OUTGOING_DIR,
   asteriskOutgoingStagingDir:
       process.env.ASTERISK_OUTGOING_STAGING_DIR ||
@@ -1482,22 +1487,6 @@ function execCommand(command, timeoutMs = 15000) {
   });
 }
 
-function callFileValue(value) {
-  return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
-}
-
-function normalizeDialPhone(value) {
-  return String(value || '').replace(/\D+/g, '').slice(0, 20);
-}
-
-function getQueuedCallDirection(profile) {
-  return String(profile?.direction || 'OUTBOUND').toUpperCase() === 'INBOUND' ? 'INBOUND' : 'OUTBOUND';
-}
-
-function getOutboundCallerId(profile) {
-  return normalizeDialPhone(profile?.outboundCallerId || profile?.reservedNumber?.number || CONFIG.outboundCallerId || '');
-}
-
 async function requestPlatformOutboundJob() {
   if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) return null;
   const response = await platformPostJson(
@@ -1531,36 +1520,6 @@ async function releasePlatformOutboundJobWithoutAttempt(outboundContactId, reaso
     logErr('[OUTBOUND]', `release failed: ${String(err?.message || err)}`);
     return null;
   });
-}
-
-function buildOutboundCallFile({ uuid, phone, profile, job }) {
-  const direction = getQueuedCallDirection(profile);
-  const callerId = getOutboundCallerId(profile);
-  const did = callerId || 'outbound';
-  const channel = `${CONFIG.outboundTrunk}:${phone}@sip.novofon.ru`;
-  const callerIdLine = callerId
-      ? `"${callFileValue(profile.clientName || 'AI Secretary')}" <${callerId}>`
-      : `"${callFileValue(profile.clientName || 'AI Secretary')}" <${phone}>`;
-
-  return [
-    `Channel: ${channel}`,
-    `CallerID: ${callerIdLine}`,
-    'MaxRetries: 0',
-    'RetryTime: 60',
-    `WaitTime: ${Math.max(10, CONFIG.outboundWaitTimeSec)}`,
-    `Context: ${CONFIG.outboundContext}`,
-    `Extension: ${CONFIG.outboundExtension}`,
-    'Priority: 1',
-    'Archive: yes',
-    `Setvar: AI_UUID=${uuid}`,
-    `Setvar: AI_DID=${did}`,
-    `Setvar: AI_CALLER=${phone}`,
-    `Setvar: AI_DIRECTION=${direction}`,
-    `Setvar: AI_OUTBOUND_CONTACT_ID=${callFileValue(job.id)}`,
-    `Setvar: AI_ASSISTANT_PROFILE_ID=${callFileValue(profile.assistantProfileId || '')}`,
-    `Setvar: AI_CLIENT_ID=${callFileValue(profile.clientId || '')}`,
-    '',
-  ].join('\n');
 }
 
 async function installOutboundCallFile(fileName, content) {
@@ -1659,13 +1618,19 @@ async function outboundDialerTick() {
         continue;
       }
 
+      const outboundCallerId = getOutboundCallerId(profile);
+      if (!outboundCallerId) {
+        logErr('[OUTBOUND]', `client reserved number is missing for contact=${job.id}; call was not queued`);
+        await releasePlatformOutboundJobWithoutAttempt(job.id, 'client reserved number is missing');
+        continue;
+      }
+
       const uuid = crypto.randomUUID();
       const normalizedUuid = normalizeUuid(uuid);
-      const did = getOutboundCallerId(profile) || 'outbound';
       const direction = getQueuedCallDirection(profile);
       const meta = {
         uuid,
-        did,
+        did: outboundCallerId,
         callerId: phone,
         clientId: profile.clientId || profile.assistantProfileId,
         assistantProfileId: profile.assistantProfileId,
@@ -1678,7 +1643,16 @@ async function outboundDialerTick() {
       putCallMeta(meta);
 
       const fileName = `ai-secretary-${safeName(job.id)}-${normalizedUuid}.call`;
-      const content = buildOutboundCallFile({ uuid, phone, profile, job });
+      const content = buildOutboundCallFile({
+        uuid,
+        phone,
+        profile,
+        job,
+        outboundTrunk: CONFIG.outboundTrunk,
+        outboundContext: CONFIG.outboundContext,
+        outboundExtension: CONFIG.outboundExtension,
+        outboundWaitTimeSec: CONFIG.outboundWaitTimeSec,
+      });
 
       try {
         await installOutboundCallFile(fileName, content);
