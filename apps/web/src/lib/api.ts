@@ -87,7 +87,12 @@ async function request<T>(path: string, options: ApiRequestOptions = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const message = typeof payload.message === "string" ? payload.message : "Request failed";
+    const message =
+      typeof payload.message === "string"
+        ? payload.message
+        : response.status >= 500
+          ? "Сервис временно обновляется. Повторите попытку через несколько секунд."
+          : "Не удалось выполнить запрос";
     if (options.token && response.status === 401) {
       notifyAuthExpired();
     }
