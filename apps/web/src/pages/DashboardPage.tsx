@@ -1822,6 +1822,8 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
                       <span className={contact.activeCallStartedAt ? "outbound-call-live" : undefined} aria-live="polite">
                         {contact.activeCallStartedAt
                           ? "Идёт разговор"
+                          : contact.queuedForCall && contact.activeCallUuid
+                            ? "Обрабатываем результат разговора..."
                           : contact.queuedForCall
                             ? "Набираем номер..."
                             : contact.attempts === 0

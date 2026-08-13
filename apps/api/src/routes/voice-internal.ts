@@ -53,6 +53,11 @@ const createCallLogSchema = z.object({
   recordingUrl: z.string().trim().max(2048).optional()
 });
 
+const callEndedSchema = z.object({
+  callUuid: z.string().trim().min(1).max(80),
+  outboundContactId: z.string().trim().min(1).optional()
+});
+
 const outboundNextSchema = z.object({
   limit: z.number().int().min(1).max(5).default(1).optional()
 });
@@ -1012,6 +1017,34 @@ voiceInternalRouter.post("/outbound/release", requireVoiceService, async (req, r
   });
 
   res.json({ ok: true, result, reason: parsed.data.reason ?? null });
+});
+
+voiceInternalRouter.post("/call/ended", requireVoiceService, async (req, res) => {
+  const parsed = callEndedSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
+    return;
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const removed = await tx.activeCall.deleteMany({
+      where: { callUuid: parsed.data.callUuid }
+    });
+
+    const released = parsed.data.outboundContactId
+      ? await tx.outboundContact.updateMany({
+          where: {
+            id: parsed.data.outboundContactId,
+            activeCallUuid: parsed.data.callUuid
+          },
+          data: { activeCallStartedAt: null }
+        })
+      : { count: 0 };
+
+    return { removedActiveCalls: removed.count, markedEndedContacts: released.count };
+  });
+
+  res.json({ ok: true, result });
 });
 
 voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => {

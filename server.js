@@ -27,6 +27,7 @@ const {
   getQueuedCallDirection,
   normalizeDialPhone,
 } = require('./outbound-call');
+const { createCallTiming, getCompletedCallSeconds } = require('./call-timing');
 
 const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
 
@@ -622,6 +623,18 @@ async function sendPlatformCallLog(payload) {
 
   logErr('[PLATFORM]', `call log failed after 3 attempts: ${String(lastError?.message || lastError)}`);
   return null;
+}
+
+async function notifyPlatformCallEnded(payload) {
+  if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken || !payload?.callUuid) {
+    return null;
+  }
+
+  return platformPostJson(
+      '/internal/voice/call/ended',
+      payload,
+      Math.max(CONFIG.platformApiTimeoutMs, 5000)
+  );
 }
 
 async function sendPlatformCalendarAction(payload) {
@@ -2181,6 +2194,7 @@ const audioServer = net.createServer((socket) => {
 
   const connId = crypto.randomUUID().slice(0, 8);
   const startedAt = ts();
+  const callTiming = createCallTiming(startedAt);
 
   socket.setNoDelay(true);
   socket.setKeepAlive(true, 10_000);
@@ -2450,8 +2464,9 @@ const audioServer = net.createServer((socket) => {
 
   function persistMeta() {
     if (!metaPath) return;
-    summary.endedAt = nowIso();
-    summary.durationMs = ts() - startedAt;
+    const timing = callTiming.snapshot(ts());
+    summary.endedAt = new Date(timing.endedAt).toISOString();
+    summary.durationMs = timing.durationMs;
     writeJson(metaPath, { summary, meta, clientCfg });
   }
 
@@ -2543,7 +2558,7 @@ const audioServer = net.createServer((socket) => {
       return;
     }
 
-    const durationSeconds = Math.max(0, Math.ceil((summary.durationMs || (ts() - startedAt)) / 1000));
+    const durationSeconds = getCompletedCallSeconds(summary.durationMs || (ts() - startedAt));
     const recordingUrl = sessionDir && summary.recordings.playback
         ? path.join(sessionDir, summary.recordings.playback)
         : sessionDir && summary.recordings.talk
@@ -3036,6 +3051,7 @@ const audioServer = net.createServer((socket) => {
     }
     if (closed) return;
     closed = true;
+    callTiming.finish(ts());
     summary.closeReason = closeReason;
 
     clearOutboundAudio('cleanup');
@@ -3070,6 +3086,17 @@ const audioServer = net.createServer((socket) => {
     }
 
     persistMeta();
+
+    const endedCallUuid = uuidHex || normalizeUuid(meta?.uuid || '');
+    if (endedCallUuid) {
+      notifyPlatformCallEnded({
+        callUuid: endedCallUuid,
+        outboundContactId:
+            clientCfg?.outboundContact?.id || meta?.outboundContactId || summary.outboundContactId || undefined,
+      }).catch((err) => {
+        logErr('[CALL-END]', `platform notification failed: ${String(err?.message || err)}`);
+      });
+    }
 
     if (!skipFinalCallLog) {
       const finalizeTimer = setTimeout(() => {
