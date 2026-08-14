@@ -1841,32 +1841,36 @@ function buildCalendarToolInstruction(clientCfg) {
   if (!isCalendarToolEnabled(clientCfg)) {
     return [
       'Внутреннее правило: Google Calendar у этого аккаунта не подключён, инструмента календаря нет.',
-      'Не говори клиенту про отсутствие Google Calendar и не пытайся проверять свободные слоты во внешней системе.',
-      'Следуй сценарию аккаунта. Не заявляй, что запись во внешнем календаре создана, перенесена или отменена.',
+      'Не говори клиенту про отсутствие Google Calendar и не пытайся проверять или изменять события во внешней системе.',
+      'Следуй сценарию аккаунта. Не заявляй, что календарное событие создано, перенесено или отменено.',
       'Если сценарий требует только принять и зафиксировать заявку, собери нужные данные и честно подтверди именно приём заявки.',
     ].join(' ');
   }
 
   const timeZone = getClientTimeZone(clientCfg);
   return [
-    'Use callsec_calendar_action with FIND_SLOTS to read the connected Google Calendar live before offering appointment times.',
-    'Use FIND_APPOINTMENTS when the caller wants to cancel or move an existing appointment but does not remember its exact date or time. It searches only appointments matching the caller phone.',
+    'Google Calendar is a generic event store for this account scenario. An event may be an appointment, lesson, delivery, order readiness time, visit, rental, callback, or any other time-bound item described by the account scenario.',
+    'Use callsec_calendar_action with FIND_SLOTS only when the scenario requires exclusive availability before accepting a time.',
+    'Use FIND_APPOINTMENTS when the caller wants to find, cancel, or move an existing calendar event but does not remember its exact date or time. It searches only events matching the caller phone.',
     'FIND_SLOTS requires rangeStartDateTime, rangeEndDateTime, and durationMinutes. If the caller named an exact time, also set requestedStartDateTime to that exact ISO 8601 time. Offer only slots returned by the tool.',
-    'The server also enforces working hours, lunch or other breaks, and the minimum gap between customers when those rules are written in the account scenario.',
-    'For a new appointment, call FIND_SLOTS before CREATE. For a move, after identifying the existing appointment and collecting the new time, call RESCHEDULE directly. RESCHEDULE checks availability while excluding the appointment being moved. Do not call FIND_SLOTS first for a move, and never implement a move as CANCEL plus CREATE.',
+    'Set availabilityMode=EXCLUSIVE when one event occupies a person or resource and overlapping events are forbidden. Set availabilityMode=PARALLEL for time-bound orders, deliveries, reminders, or other events that the scenario allows at the same time.',
+    'For EXCLUSIVE events, call FIND_SLOTS before CREATE. For PARALLEL events, do not reject the requested time merely because another event overlaps; CREATE still enforces explicit working hours and breaks from the scenario.',
+    'Do not invent capacity rules. Follow explicit scenario rules; when they are absent, appointments and resource reservations are EXCLUSIVE, while orders, deliveries, reminders, and callbacks are PARALLEL.',
+    'For a move, after identifying the existing event and collecting the new time, call RESCHEDULE directly. RESCHEDULE preserves the event availability mode, checks relevant constraints, and excludes the event being moved. Never implement a move as CANCEL plus CREATE.',
     'У тебя подключён инструмент Google Calendar callsec_calendar_action.',
     `Рабочая временная зона клиента: ${timeZone}. Текущее локальное время: ${getReferenceLocalDateTime(timeZone)}.`,
-    'Когда клиент хочет создать, перенести или отменить запись, сначала собери только минимально нужные данные.',
-    'Не отправляй владельцу для подтверждения обычные записи, переносы и отмены. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или ситуации вне сценария.',
-    'Для CREATE нужны услуга, дата, время, имя и подтверждение номера.',
+    'Когда клиент хочет создать, перенести или отменить событие, сначала собери только данные, которые требует сценарий этого аккаунта.',
+    'Не добавляй обязательные поля от себя: для одного клиента это услуга и мастер, для другого состав заказа и адрес, для третьего тема урока.',
+    'Не отправляй владельцу для подтверждения обычные календарные действия. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или ситуации вне сценария.',
+    'Для CREATE обязательны дата, время и все существенные данные, прямо требуемые сценарием. Номер звонящего уже доступен как внутренний факт.',
     'Результат FIND_SLOTS является только списком предложений, а не выбором клиента. Не выбирай слот самостоятельно.',
     'Список предложений FIND_SLOTS может быть ограничен. Нельзя объявлять точное время занятым только потому, что его нет среди первых предложений: проверь названное клиентом время через requestedStartDateTime.',
-    'Если клиент отверг предложенные окна или назвал другое время, не используй старый слот. Проверь новое время и попроси явно подтвердить точные дату и время перед CREATE.',
-    'Для RESCHEDULE нужны старая дата/время, новая дата/время, имя или подтверждённый номер. Не спрашивай услугу и мастера заново, если можно найти старую запись по телефону и времени.',
-    'При переносе найденной записи сразу вызывай RESCHEDULE с её старым и новым временем: этот вызов сам проверит занятость и не считает переносимую запись конфликтом.',
+    'Если клиент отверг предложенные окна или назвал другое время, не используй старый слот. Для EXCLUSIVE-события проверь новое время и попроси явно подтвердить точные дату и время перед CREATE.',
+    'Для RESCHEDULE нужны данные, достаточные для поиска старого события, и новое время. Не спрашивай заново уже известные данные, если событие можно найти по телефону и времени.',
+    'При переносе найденного события сразу вызывай RESCHEDULE с его старым и новым временем: этот вызов не считает переносимое событие конфликтом.',
     'Для CANCEL нужны старая дата/время или дата, имя или подтверждённый номер.',
-    'Перед словами "запись создана", "запись перенесена" или "запись отменена" обязательно вызови callsec_calendar_action и дождись результата. Без успешного результата инструмента запрещено подтверждать успех.',
-    'Перед CREATE или RESCHEDULE кратко повтори точные услугу, дату и время и дождись явного "да" или равнозначного подтверждения именно этих данных.',
+    'Перед подтверждением создания, переноса или отмены обязательно вызови callsec_calendar_action и дождись результата. Без успешного результата инструмента запрещено подтверждать успех.',
+    'Перед CREATE или RESCHEDULE кратко повтори существенные данные из сценария, дату и время и дождись явного подтверждения именно этих данных.',
     'Если клиент говорит "перенести", "перенос", "поменять время" или "сдвинуть", действие всегда RESCHEDULE, никогда CREATE.',
     'Для CREATE передавай startDateTime и endDateTime в ISO 8601 с UTC offset. Для RESCHEDULE передавай старое время в targetStartDateTime или targetDate и новое время в startDateTime/endDateTime. Для CANCEL передавай targetStartDateTime или targetDate.',
     'Если инструмент вернул conflict, скажи, что это время занято, и попроси другое время. Если not_found, уточни дату, время или имя. Если created, cancelled или rescheduled, подтверди результат коротко.',
@@ -1879,8 +1883,9 @@ function buildCalendarToolDefinition() {
     type: 'function',
     name: 'callsec_calendar_action',
     description: [
-      'Find live availability or caller appointments, create, cancel, or reschedule an appointment in the connected Google Calendar.',
-      'Call this only after collecting the required appointment details and before confirming success to the caller.',
+      'Find live availability or caller events, create, cancel, or reschedule a time-bound event in the connected Google Calendar.',
+      'Works for appointments, orders, deliveries, lessons, visits, callbacks, rentals, and other account-defined scenarios.',
+      'Call this only after collecting the details required by the account scenario and before confirming success to the caller.',
     ].join(' '),
     parameters: {
       type: 'object',
@@ -1893,7 +1898,7 @@ function buildCalendarToolDefinition() {
         },
         title: {
           type: 'string',
-          description: 'Short appointment title, for example "Мужская стрижка". Omit if unknown.',
+          description: 'Short scenario-specific event title, for example "Мужская стрижка" or "Доставка заказа №42". Omit if unknown.',
         },
         customerName: {
           type: 'string',
@@ -1901,23 +1906,28 @@ function buildCalendarToolDefinition() {
         },
         reason: {
           type: 'string',
-          description: 'Service or reason for the appointment. Omit if unknown.',
+          description: 'Service, order, delivery, lesson, callback reason, or other event purpose. Omit if unknown.',
+        },
+        availabilityMode: {
+          type: 'string',
+          enum: ['EXCLUSIVE', 'PARALLEL'],
+          description: 'EXCLUSIVE forbids overlapping events for a booked person/resource. PARALLEL allows overlap for orders, deliveries, reminders, callbacks, and other scenario-defined concurrent events. Omit on RESCHEDULE to preserve the existing event mode.',
         },
         targetStartDateTime: {
           type: 'string',
-          description: 'Existing appointment start time for CANCEL or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
+          description: 'Existing event start time for CANCEL or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
         },
         targetDate: {
           type: 'string',
-          description: 'Existing appointment date as YYYY-MM-DD for CANCEL, RESCHEDULE, or FIND_APPOINTMENTS when exact time is unknown. Omit if unknown.',
+          description: 'Existing event date as YYYY-MM-DD for CANCEL, RESCHEDULE, or FIND_APPOINTMENTS when exact time is unknown. Omit if unknown.',
         },
         startDateTime: {
           type: 'string',
-          description: 'New appointment start time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if not applicable.',
+          description: 'New event start time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if not applicable.',
         },
         endDateTime: {
           type: 'string',
-          description: 'New appointment end time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
+          description: 'New event end time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
         },
         requestedStartDateTime: {
           type: 'string',
@@ -1935,7 +1945,7 @@ function buildCalendarToolDefinition() {
           type: 'integer',
           minimum: 5,
           maximum: 480,
-          description: 'Appointment duration for FIND_SLOTS. Infer it from the service rules in the scenario; use 30 only when no duration is provided.',
+          description: 'Event duration for FIND_SLOTS. Infer it from the scenario; use 30 only when no duration is provided.',
         },
         limit: {
           type: 'integer',
@@ -2898,6 +2908,11 @@ const audioServer = net.createServer((socket) => {
       action: allowed.has(action) ? action : 'NONE',
     };
 
+    const availabilityMode = String(args?.availabilityMode || '').toUpperCase();
+    if (availabilityMode === 'EXCLUSIVE' || availabilityMode === 'PARALLEL') {
+      normalized.availabilityMode = availabilityMode;
+    }
+
     for (const key of [
       'title',
       'customerName',
@@ -2935,7 +2950,7 @@ const audioServer = net.createServer((socket) => {
       },
       assistantInstruction: [
         'Календарное действие сейчас не удалось выполнить технически.',
-        'Коротко извинись, не подтверждай запись/отмену/перенос как выполненные, уточни данные или предложи другое время.',
+        'Коротко извинись, не подтверждай календарное действие как выполненное, уточни данные или предложи другое время.',
         'Владельцу передавай только если клиент явно просит человека.',
       ].join(' '),
     };

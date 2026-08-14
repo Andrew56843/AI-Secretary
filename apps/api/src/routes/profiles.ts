@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
 import { createGreetingAudioCacheKey, generateGreetingAudioPcm24 } from "../lib/greeting-audio.js";
+import { warmCalendarSchedulePolicy } from "../lib/google-calendar.js";
 import { OpenAiRequestError, postOpenAiJson } from "../lib/openai.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -355,6 +356,8 @@ profilesRouter.put("/:mode", requireAuth, async (req, res) => {
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
   );
+
+  warmCalendarSchedulePolicy(profile.prompt);
 
   res.json({ profile });
 });

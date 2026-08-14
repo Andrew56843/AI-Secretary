@@ -43,6 +43,7 @@ const calendarActionExtractionSchema = z.object({
   title: z.string().trim().max(200).optional().nullable(),
   customerName: z.string().trim().max(120).optional().nullable(),
   reason: z.string().trim().max(240).optional().nullable(),
+  availabilityMode: z.enum(["EXCLUSIVE", "PARALLEL"]).optional().nullable(),
   targetStartDateTime: z.string().trim().max(80).optional().nullable(),
   targetEndDateTime: z.string().trim().max(80).optional().nullable(),
   targetDate: z.string().trim().max(10).optional().nullable(),
@@ -298,6 +299,14 @@ export function extractDeterministicSchedulePolicy(assistantPrompt: string): Cal
   return { gapMinutes, workingHours, breaks };
 }
 
+export function warmCalendarSchedulePolicy(assistantPrompt: string | null | undefined) {
+  void extractSchedulePolicyFromPrompt(assistantPrompt).catch((error: unknown) => {
+    console.warn("Calendar schedule policy warmup failed", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  });
+}
+
 function parseExplicitTimeFromCallerTurn(turn: string) {
   const clockMatch = turn.match(/(?:^|\D)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)/u);
   const spacedClockMatch = turn.match(/(?:^|\D)([01]?\d|2[0-3])\s+([0-5]\d)(?!\d)/u);
@@ -382,13 +391,14 @@ async function extractSchedulePolicyFromPrompt(assistantPrompt: string | null | 
           {
             role: "system",
             content: [
-              "Extract only explicit appointment schedule constraints from an AI secretary scenario.",
+              "Extract only explicit time and availability constraints from an arbitrary AI secretary scenario.",
+              "The scenario may concern appointments, orders, deliveries, lessons, visits, rentals, callbacks, or another industry.",
               "Return strict JSON with gapMinutes, workingHours, and breaks.",
-              "gapMinutes is the minimum empty time required between consecutive customers.",
+              "gapMinutes is the minimum empty time required between consecutive exclusive events or customers.",
               "Use ISO weekday numbers: Monday=1 through Sunday=7.",
               "Use HH:mm local wall-clock times. Expand daily/every-day rules to days 1 through 7.",
               "For a one-time exception, use date as YYYY-MM-DD and an empty daysOfWeek array.",
-              "workingHours contains explicit business or appointment hours only.",
+              "workingHours contains explicit business, service, fulfillment, delivery, or appointment hours only.",
               "breaks contains lunch and any other explicit recurring unavailable periods.",
               "Do not infer missing hours, gaps, or breaks. Use zero and empty arrays when absent.",
               'JSON example: {"gapMinutes":15,"workingHours":[{"daysOfWeek":[1,2,3,4,5],"date":null,"start":"09:00","end":"18:00","label":null}],"breaks":[{"daysOfWeek":[1,2,3,4,5],"date":null,"start":"13:00","end":"14:00","label":"lunch"}]}.'
@@ -509,7 +519,7 @@ function hasRescheduleIntent(transcript: string | null | undefined) {
 
   return (
     /(перенес[\p{L}\p{N}_]*|перенести|перенос[\p{L}\p{N}_]*|передвин[\p{L}\p{N}_]*|сдвин[\p{L}\p{N}_]*|поменя[\p{L}\p{N}_]*|измен[\p{L}\p{N}_]*)/u.test(text) &&
-    /(запис[\p{L}\p{N}_]*|время|час[\p{L}\p{N}_]*|слот[\p{L}\p{N}_]*)/u.test(text)
+    /(запис[\p{L}\p{N}_]*|время|час[\p{L}\p{N}_]*|слот[\p{L}\p{N}_]*|заказ[\p{L}\p{N}_]*|достав[\p{L}\p{N}_]*|урок[\p{L}\p{N}_]*|встреч[\p{L}\p{N}_]*|брон[\p{L}\p{N}_]*|аренд[\p{L}\p{N}_]*|звон[\p{L}\p{N}_]*|событ[\p{L}\p{N}_]*)/u.test(text)
   );
 }
 
@@ -521,7 +531,7 @@ function hasCancelIntent(transcript: string | null | undefined) {
 
   return (
     /(отмен[\p{L}\p{N}_]*|убер[\p{L}\p{N}_]*|снять|удал[\p{L}\p{N}_]*)/u.test(text) &&
-    /(запис[\p{L}\p{N}_]*|визит|слот)/u.test(text)
+    /(запис[\p{L}\p{N}_]*|визит[\p{L}\p{N}_]*|слот[\p{L}\p{N}_]*|заказ[\p{L}\p{N}_]*|достав[\p{L}\p{N}_]*|урок[\p{L}\p{N}_]*|встреч[\p{L}\p{N}_]*|брон[\p{L}\p{N}_]*|аренд[\p{L}\p{N}_]*|звон[\p{L}\p{N}_]*|событ[\p{L}\p{N}_]*)/u.test(text)
   );
 }
 
@@ -605,29 +615,33 @@ function buildExtractionRequest(input: {
       {
         role: "system",
         content: [
-          "You extract calendar actions from Russian AI phone secretary transcripts.",
+          "You extract generic calendar events from Russian AI phone secretary transcripts for arbitrary account scenarios.",
+          "An event can be an appointment, order, delivery, lesson, visit, callback, rental, reminder, or another time-bound item.",
           "Return strict JSON only.",
           "Choose exactly one action: CREATE, CANCEL, RESCHEDULE, or NONE.",
-          "CREATE means the assistant clearly confirmed that a new appointment was booked or recorded.",
-          "CANCEL means the customer clearly asked to cancel an existing appointment and the assistant agreed to cancel it.",
-          "RESCHEDULE means the customer clearly moved an existing appointment to a new date or time.",
+          "CREATE means the assistant clearly confirmed that a new time-bound event was booked, accepted, scheduled, or recorded.",
+          "CANCEL means the customer clearly asked to cancel an existing event and the assistant agreed to cancel it.",
+          "RESCHEDULE means the customer clearly moved an existing event to a new date or time.",
           "Use NONE for vague interest, questions, failed calls, escalation, or conversations without a final calendar action.",
           "Never return CREATE for a cancellation conversation.",
-          "Never return CREATE if the customer asked to reschedule, move, change, or shift an existing appointment; return RESCHEDULE.",
+          "Never return CREATE if the customer asked to reschedule, move, change, or shift an existing event; return RESCHEDULE.",
           "Russian RESCHEDULE clues include: перенести, перенос, передвинуть, сдвинуть, поменять время, изменить время.",
           "Example: 'записывалась завтра на три, хочу перенести на двенадцать' means targetStartDateTime is tomorrow at 15:00 and startDateTime is tomorrow at 12:00.",
           "If a reschedule target exact time is known, put it into targetStartDateTime. If only the target day is known, put it into targetDate.",
           `Use ${input.timeZone} as the business time zone.`,
           `The reference local date-time for relative phrases is ${getReferenceDateTime(input.createdAt, input.timeZone)}.`,
           "Resolve phrases like 'tomorrow' relative to the reference date.",
-          "For CANCEL and RESCHEDULE, targetStartDateTime is the existing appointment date-time to find in Google Calendar. If only the date is known, set targetDate as YYYY-MM-DD.",
-          "For CREATE, startDateTime/endDateTime describe the new appointment.",
-          "For RESCHEDULE, startDateTime/endDateTime describe the new appointment time after moving.",
+          "For CANCEL and RESCHEDULE, targetStartDateTime is the existing event date-time to find in Google Calendar. If only the date is known, set targetDate as YYYY-MM-DD.",
+          "For CREATE, startDateTime/endDateTime describe the new event.",
+          "For RESCHEDULE, startDateTime/endDateTime describe the new event time after moving.",
           "If the transcript confirms a start time but no duration, infer duration from the assistant profile/scenario and the selected service.",
           "Example: if the scenario says a men's haircut lasts 30 minutes and the customer booked a men's haircut, use 30 minutes.",
           "If no duration can be inferred from the transcript or scenario, use 30 minutes.",
+          "Set availabilityMode to EXCLUSIVE when the event occupies a person or resource and overlaps are forbidden.",
+          "Set availabilityMode to PARALLEL for orders, deliveries, reminders, callbacks, or other events that the scenario allows concurrently.",
+          "Follow an explicit scenario rule first. If the scenario is silent, appointments and resource reservations are EXCLUSIVE; orders, deliveries, reminders, and callbacks are PARALLEL.",
           "Return ISO 8601 date-times with the correct UTC offset for the business time zone.",
-          "JSON shape: {\"action\":\"CREATE|CANCEL|RESCHEDULE|NONE\",\"confidence\":number,\"title\":string|null,\"customerName\":string|null,\"reason\":string|null,\"targetStartDateTime\":string|null,\"targetEndDateTime\":string|null,\"targetDate\":\"YYYY-MM-DD|null\",\"startDateTime\":string|null,\"endDateTime\":string|null}."
+          "JSON shape: {\"action\":\"CREATE|CANCEL|RESCHEDULE|NONE\",\"confidence\":number,\"title\":string|null,\"customerName\":string|null,\"reason\":string|null,\"availabilityMode\":\"EXCLUSIVE|PARALLEL|null\",\"targetStartDateTime\":string|null,\"targetEndDateTime\":string|null,\"targetDate\":\"YYYY-MM-DD|null\",\"startDateTime\":string|null,\"endDateTime\":string|null}."
         ].join("\n")
       },
       {
@@ -711,7 +725,7 @@ function normalizeExtractedCalendarAction(extracted: CalendarActionExtraction): 
   };
 }
 
-function buildEventSummary(extracted: CalendarActionExtraction, fallback = "Callsec appointment") {
+function buildEventSummary(extracted: CalendarActionExtraction, fallback = "Callsec event") {
   const name = extracted.customerName?.trim();
   const reason = extracted.reason?.trim();
   const generated = [name, reason].filter(Boolean).join(" - ");
@@ -1046,6 +1060,24 @@ function eventConflictsWithSlot(params: {
 
   const gapMs = params.gapMinutes * 60 * 1000;
   return eventStartMs < params.requestedEndMs + gapMs && eventEndMs > params.requestedStartMs - gapMs;
+}
+
+export function resolveCalendarAvailabilityMode(
+  action: CalendarActionExtraction,
+  existingEvent?: GoogleCalendarEventResponse | null
+) {
+  const storedMode = existingEvent?.extendedProperties?.private?.callsecAvailabilityMode;
+  if (storedMode === "PARALLEL" || storedMode === "EXCLUSIVE") {
+    return storedMode;
+  }
+  if (existingEvent?.transparency === "transparent") {
+    return "PARALLEL" as const;
+  }
+  if (action.availabilityMode === "PARALLEL" || action.availabilityMode === "EXCLUSIVE") {
+    return action.availabilityMode;
+  }
+
+  return "EXCLUSIVE" as const;
 }
 
 async function findConflictingEvent(params: {
@@ -1404,13 +1436,16 @@ async function createGoogleCalendarEvent(params: {
     } satisfies CalendarAutomationResult;
   }
 
-  const conflict = await findConflictingEvent({
-    accessToken: params.accessToken,
-    calendarId,
-    startDateTime: params.extracted.startDateTime,
-    endDateTime: params.extracted.endDateTime,
-    gapMinutes: params.policy.gapMinutes ?? 0
-  });
+  const availabilityMode = resolveCalendarAvailabilityMode(params.extracted);
+  const conflict = availabilityMode === "EXCLUSIVE"
+    ? await findConflictingEvent({
+        accessToken: params.accessToken,
+        calendarId,
+        startDateTime: params.extracted.startDateTime,
+        endDateTime: params.extracted.endDateTime,
+        gapMinutes: params.policy.gapMinutes ?? 0
+      })
+    : null;
 
   if (conflict) {
     return {
@@ -1426,6 +1461,7 @@ async function createGoogleCalendarEvent(params: {
   const event = {
     summary: buildEventSummary(params.extracted),
     description: buildEventDescription(params),
+    transparency: availabilityMode === "PARALLEL" ? "transparent" : "opaque",
     start: {
       dateTime: params.extracted.startDateTime,
       timeZone: params.timeZone
@@ -1438,7 +1474,8 @@ async function createGoogleCalendarEvent(params: {
       private: {
         callsecCallLogId: params.callLogId,
         callsecCustomerPhone: params.customerPhone,
-        callsecCreatedBy: "callsec"
+        callsecCreatedBy: "callsec",
+        callsecAvailabilityMode: availabilityMode
       }
     }
   };
@@ -1537,6 +1574,7 @@ async function rescheduleGoogleCalendarEvent(params: {
   }
 
   const endDateTime = getRescheduleEndDateTime(event, params.action, params.transcript);
+  const availabilityMode = resolveCalendarAvailabilityMode(params.action, event);
   const policyConflict = getSchedulePolicyConflict({
     startDateTime: params.action.startDateTime,
     endDateTime,
@@ -1553,14 +1591,16 @@ async function rescheduleGoogleCalendarEvent(params: {
     } satisfies CalendarAutomationResult;
   }
 
-  const conflict = await findConflictingEvent({
-    accessToken: params.accessToken,
-    calendarId,
-    startDateTime: params.action.startDateTime,
-    endDateTime,
-    excludeEventId: event.id,
-    gapMinutes: params.policy.gapMinutes ?? 0
-  });
+  const conflict = availabilityMode === "EXCLUSIVE"
+    ? await findConflictingEvent({
+        accessToken: params.accessToken,
+        calendarId,
+        startDateTime: params.action.startDateTime,
+        endDateTime,
+        excludeEventId: event.id,
+        gapMinutes: params.policy.gapMinutes ?? 0
+      })
+    : null;
 
   if (conflict) {
     return {
@@ -1583,13 +1623,14 @@ async function rescheduleGoogleCalendarEvent(params: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      summary: buildEventSummary(params.action, event.summary?.trim() || "Callsec appointment"),
+      summary: buildEventSummary(params.action, event.summary?.trim() || "Callsec event"),
       description: buildEventDescription({
         callLogId: params.callLogId,
         customerPhone: params.customerPhone,
         transcript: params.transcript,
         extracted: params.action
       }),
+      transparency: availabilityMode === "PARALLEL" ? "transparent" : "opaque",
       start: {
         dateTime: params.action.startDateTime,
         timeZone: params.timeZone
@@ -1603,7 +1644,8 @@ async function rescheduleGoogleCalendarEvent(params: {
           ...privateProperties,
           callsecLastCallLogId: params.callLogId,
           callsecCustomerPhone: params.customerPhone,
-          callsecUpdatedBy: "callsec"
+          callsecUpdatedBy: "callsec",
+          callsecAvailabilityMode: availabilityMode
         }
       }
     })

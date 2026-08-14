@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   extractDeterministicSchedulePolicy,
-  inferRequestedStartDateTime
+  inferRequestedStartDateTime,
+  resolveCalendarAvailabilityMode
 } from "./google-calendar.js";
 
 test("extracts a customer gap when the duration is written before 'between appointments'", () => {
@@ -51,4 +52,28 @@ test("uses the explicit tool argument before transcript inference", () => {
   );
 
   assert.equal(requested, "2026-08-15T10:30:00+03:00");
+});
+
+test("treats resource bookings as exclusive by default", () => {
+  assert.equal(resolveCalendarAvailabilityMode({ action: "CREATE" }), "EXCLUSIVE");
+});
+
+test("allows scenario events such as orders to run in parallel", () => {
+  assert.equal(
+    resolveCalendarAvailabilityMode({ action: "CREATE", availabilityMode: "PARALLEL" }),
+    "PARALLEL"
+  );
+});
+
+test("preserves the availability mode when a parallel event is moved", () => {
+  assert.equal(
+    resolveCalendarAvailabilityMode(
+      { action: "RESCHEDULE", availabilityMode: "EXCLUSIVE" },
+      {
+        transparency: "transparent",
+        extendedProperties: { private: { callsecAvailabilityMode: "PARALLEL" } }
+      }
+    ),
+    "PARALLEL"
+  );
 });

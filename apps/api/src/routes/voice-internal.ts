@@ -10,6 +10,7 @@ import {
   finalizeCalendarTranscriptForCall,
   maybeSyncCalendarFromCallLog,
   syncCalendarAction,
+  warmCalendarSchedulePolicy,
   type CalendarAutomationResult
 } from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
@@ -501,7 +502,7 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
         `The caller's exact requested slot ${result.requestedSlot.startDateTime} - ${result.requestedSlot.endDateTime} was checked live and is available.`,
         "Briefly confirm in Russian that this exact time is available, then collect any missing name or phone confirmation.",
         "Do not say that the requested time is unavailable merely because the separate suggestion list is limited.",
-        "Do not claim that an appointment was created until CREATE succeeds."
+        "Do not claim that an event was created until CREATE succeeds."
       ].join(" ");
     }
 
@@ -521,7 +522,7 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
     if (!result.available) {
       return [
         "The connected Google Calendar was checked live and has no available slots in the requested range.",
-        "Briefly tell the caller in Russian that this period is unavailable and ask for another day or time range.",
+        "Briefly tell the caller in Russian that this exclusive period is unavailable and ask for another day or time range.",
         "Do not invent a slot."
       ].join(" ");
     }
@@ -531,15 +532,15 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
       `The connected Google Calendar was checked live. Available slots in ${result.timeZone}: ${slots}.`,
       "Offer up to three of these slots in Russian and let the caller choose.",
       "This is a limited suggestion list, not proof that every unlisted time is unavailable. Check any exact time named by the caller with another FIND_SLOTS call.",
-      "Do not claim that an appointment was created until CREATE or RESCHEDULE succeeds."
+      "Do not claim that an event was created until CREATE or RESCHEDULE succeeds."
     ].join(" ");
   }
 
   if (result.status === "appointments") {
     if (!result.found) {
       return [
-        "The connected Google Calendar was checked live and no future appointment matching this caller phone was found.",
-        "Tell the caller this briefly in Russian and ask for the original date, time, or name.",
+        "The connected Google Calendar was checked live and no future event matching this caller phone was found.",
+        "Tell the caller this briefly in Russian and ask for the identifying details required by the account scenario.",
         "Do not claim that anything was cancelled or moved."
       ].join(" ");
     }
@@ -548,43 +549,43 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
       .map((appointment) => `${appointment.title}: ${appointment.startDateTime} - ${appointment.endDateTime}`)
       .join("; ");
     return [
-      `The connected Google Calendar was checked live. Appointments matching this caller phone in ${result.timeZone}: ${appointments}.`,
-      "Briefly identify the matching appointment in Russian and confirm which one the caller means before CANCEL or RESCHEDULE.",
-      "Do not reveal appointments belonging to other phone numbers."
+      `The connected Google Calendar was checked live. Events matching this caller phone in ${result.timeZone}: ${appointments}.`,
+      "Briefly identify the matching calendar event in Russian and confirm which one the caller means before CANCEL or RESCHEDULE.",
+      "Do not reveal events belonging to other phone numbers."
     ].join(" ");
   }
 
   const actionText =
     action.action === "CREATE"
-      ? "запись"
+      ? "создание события"
       : action.action === "CANCEL"
-        ? "отмену записи"
+        ? "отмену события"
         : action.action === "RESCHEDULE"
-          ? "перенос записи"
+          ? "перенос события"
           : action.action === "FIND_APPOINTMENTS"
-            ? "поиск записи"
+            ? "поиск события"
             : "поиск свободного времени";
 
   if (result.status === "created" || result.status === "exists") {
     return [
-      "Google Calendar подтвердил создание записи.",
-      "Коротко скажи клиенту, что запись сделана, повтори дату, время, услугу и имя, если они есть в разговоре.",
+      "Google Calendar подтвердил создание события по сценарию аккаунта.",
+      "Коротко подтверди результат словами, подходящими сценарию: запись создана, заказ принят к указанному времени, доставка запланирована и так далее. Повтори только существенные данные разговора.",
       "Не говори, что передашь владельцу или что нужно ждать подтверждения."
     ].join(" ");
   }
 
   if (result.status === "cancelled") {
     return [
-      "Google Calendar подтвердил отмену записи.",
-      "Коротко скажи клиенту, что запись отменена.",
+      "Google Calendar подтвердил отмену события.",
+      "Коротко подтверди отмену словами, соответствующими сценарию аккаунта.",
       "Не говори, что передашь владельцу или что нужно ждать подтверждения."
     ].join(" ");
   }
 
   if (result.status === "rescheduled") {
     return [
-      "Google Calendar подтвердил перенос записи.",
-      "Коротко скажи клиенту, что запись перенесена, повтори новое время.",
+      "Google Calendar подтвердил перенос события.",
+      "Коротко подтверди перенос словами, соответствующими сценарию аккаунта, и повтори новое время.",
       "Не говори, что передашь владельцу или что нужно ждать подтверждения."
     ].join(" ");
   }
@@ -605,8 +606,8 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
 
   if (result.status === "not_found") {
     return [
-      "Активная запись не найдена в Google Calendar.",
-      "Скажи клиенту, что не нашёл запись по указанным данным, и уточни дату, время или имя.",
+      "Подходящее событие не найдено в Google Calendar.",
+      "Скажи клиенту, что не нашёл его по указанным данным, и уточни сведения, подходящие сценарию: дату, время, имя или детали заказа.",
       "Не говори, что запись отменена или перенесена."
     ].join(" ");
   }
@@ -749,6 +750,8 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     });
     return;
   }
+
+  warmCalendarSchedulePolicy(profile.prompt);
 
   const [inboundProfile, outboundContact] = await Promise.all([
     direction === CallDirection.OUTBOUND
