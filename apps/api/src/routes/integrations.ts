@@ -3,6 +3,7 @@ import type { GoogleAccount } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
+import { hasGoogleCalendarEventWriteScope } from "../lib/google-oauth-scopes.js";
 import { prisma } from "../lib/prisma.js";
 import { encryptSecret } from "../lib/secret-box.js";
 import { requireAuth } from "../middleware/require-auth.js";
@@ -49,11 +50,14 @@ function getGoogleOAuthConfig() {
 }
 
 function publicGoogle(account: GoogleAccount | null | undefined) {
+  const isConnected =
+    account?.status === "CONNECTED" && hasGoogleCalendarEventWriteScope(account.scope);
+
   return {
-    status: account?.status ?? "DISCONNECTED",
-    googleEmail: account?.googleEmail ?? null,
-    calendarId: account?.calendarId ?? null,
-    connectedAt: account?.connectedAt ?? null
+    status: isConnected ? "CONNECTED" : "DISCONNECTED",
+    googleEmail: isConnected ? account.googleEmail : null,
+    calendarId: isConnected ? account.calendarId : null,
+    connectedAt: isConnected ? account.connectedAt : null
   };
 }
 
@@ -234,6 +238,33 @@ integrationsRouter.get("/google/oauth/callback", async (req, res) => {
 
   try {
     const tokens = await exchangeGoogleCodeForTokens(code);
+    const grantedScope = tokens.scope ?? "";
+
+    if (!hasGoogleCalendarEventWriteScope(grantedScope)) {
+      await prisma.$transaction([
+        prisma.googleAccount.upsert({
+          where: { userId: oauthState.userId },
+          update: {
+            status: "DISCONNECTED",
+            googleEmail: null,
+            calendarId: null,
+            accessToken: null,
+            refreshToken: null,
+            tokenExpiresAt: null,
+            scope: null,
+            connectedAt: null
+          },
+          create: {
+            userId: oauthState.userId,
+            status: "DISCONNECTED"
+          }
+        }),
+        prisma.googleOAuthState.deleteMany({ where: { userId: oauthState.userId } })
+      ]);
+      res.redirect(getGoogleReturnUrl("error", "calendar_scope"));
+      return;
+    }
+
     const [googleEmail, existingAccount] = await Promise.all([
       fetchGoogleEmail(tokens.access_token),
       prisma.googleAccount.findUnique({ where: { userId: oauthState.userId } })
@@ -254,7 +285,7 @@ integrationsRouter.get("/google/oauth/callback", async (req, res) => {
           accessToken: encryptSecret(tokens.access_token),
           refreshToken,
           tokenExpiresAt: new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000),
-          scope: tokens.scope ?? env.GOOGLE_CALENDAR_SCOPES,
+          scope: grantedScope,
           connectedAt: new Date()
         },
         create: {
@@ -265,7 +296,7 @@ integrationsRouter.get("/google/oauth/callback", async (req, res) => {
           accessToken: encryptSecret(tokens.access_token),
           refreshToken,
           tokenExpiresAt: new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000),
-          scope: tokens.scope ?? env.GOOGLE_CALENDAR_SCOPES,
+          scope: grantedScope,
           connectedAt: new Date()
         }
       }),

@@ -93,6 +93,19 @@ function readGoogleOAuthResult() {
   return googleResult ? "error" : null;
 }
 
+function readGoogleOAuthErrorMessage() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("google") !== "error") {
+    return null;
+  }
+
+  if (url.searchParams.get("reason") === "calendar_scope") {
+    return "Google не предоставил доступ к событиям календаря. Повторите подключение и подтвердите это разрешение.";
+  }
+
+  return "Не удалось подключить Google Calendar";
+}
+
 type ScenarioTemplateId = "dentist" | "barber" | "tutor" | "auto" | "beauty" | "custom";
 
 function delay(ms: number) {
@@ -706,9 +719,7 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
   const [notice, setNotice] = useState<string | null>(() =>
     readGoogleOAuthResult() === "connected" ? "Google Calendar подключен" : null
   );
-  const [error, setError] = useState<string | null>(() =>
-    readGoogleOAuthResult() === "error" ? "Не удалось подключить Google Calendar" : null
-  );
+  const [error, setError] = useState<string | null>(() => readGoogleOAuthErrorMessage());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [promptApplying, setPromptApplying] = useState(false);
