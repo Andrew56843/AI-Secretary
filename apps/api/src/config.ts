@@ -31,7 +31,7 @@ const envSchema = z.object({
     .string()
     .trim()
     .min(1)
-    .default("https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email"),
+    .default("https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email"),
   PROMPT_EDITOR_MODEL: z.string().trim().min(1).default("gpt-4o-mini"),
   OPENAI_TTS_MODEL: z.string().trim().min(1).default("gpt-4o-mini-tts"),
   CALL_RECORDINGS_ROOT: z.string().trim().min(1).default("/home/andrew/ai/records"),

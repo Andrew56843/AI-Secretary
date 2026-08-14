@@ -1,6 +1,7 @@
 import type { CallDirection, GoogleAccount } from "@prisma/client";
 import { z } from "zod";
 import { env } from "../config.js";
+import { hasGoogleCalendarEventWriteScope } from "./google-oauth-scopes.js";
 import { OpenAiRequestError, postOpenAiJson } from "./openai.js";
 import { prisma } from "./prisma.js";
 import { decryptSecret, encryptSecret } from "./secret-box.js";
@@ -159,10 +160,6 @@ export class GoogleCalendarError extends Error {
   ) {
     super(message);
   }
-}
-
-function hasCalendarScope(scope: string | null | undefined) {
-  return String(scope ?? "").split(/\s+/).some((item) => item === "https://www.googleapis.com/auth/calendar");
 }
 
 function getGoogleOAuthConfig() {
@@ -716,7 +713,7 @@ async function refreshGoogleAccessToken(account: GoogleAccount) {
 }
 
 async function getGoogleAccessToken(account: GoogleAccount) {
-  if (!hasCalendarScope(account.scope)) {
+  if (!hasGoogleCalendarEventWriteScope(account.scope)) {
     throw new GoogleCalendarError("Google Calendar scope is not granted");
   }
 
@@ -1603,7 +1600,7 @@ async function getConnectedCalendarContext(userId: string) {
   if (!account || account.status !== "CONNECTED") {
     return { status: "skipped" as const, reason: "GOOGLE_NOT_CONNECTED" as const, timeZone };
   }
-  if (!hasCalendarScope(account.scope)) {
+  if (!hasGoogleCalendarEventWriteScope(account.scope)) {
     return { status: "skipped" as const, reason: "CALENDAR_SCOPE_MISSING" as const, timeZone };
   }
 
