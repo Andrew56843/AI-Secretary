@@ -929,7 +929,10 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
 
       return null;
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      timeout: 15_000
+    }
   );
 
   if (!claimed) {
