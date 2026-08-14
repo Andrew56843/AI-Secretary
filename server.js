@@ -28,6 +28,7 @@ const {
   normalizeDialPhone,
 } = require('./outbound-call');
 const { createCallTiming, getCompletedCallSeconds } = require('./call-timing');
+const { createDownsampler24kTo8k } = require('./audio-resampling');
 
 const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
 
@@ -1312,45 +1313,6 @@ function upsample8kTo24k(pcm8) {
     out.writeInt16LE(clampPcm16(Math.round((s0 + 2 * s1) / 3)), outOffset); outOffset += 2;
   }
   return out;
-}
-
-// Streaming 24k -> 8k downsampler with carry, so remainder is not lost between deltas
-function createDownsampler24kTo8k() {
-  let carry = Buffer.alloc(0);
-
-  return function downsample24kTo8kStream(pcm24) {
-    if (!pcm24?.length && !carry.length) return Buffer.alloc(0);
-
-    const input = carry.length
-        ? Buffer.concat([carry, pcm24 || Buffer.alloc(0)])
-        : (pcm24 || Buffer.alloc(0));
-
-    const inSamples = Math.floor(input.length / 2);
-    const usableSamples = Math.floor(inSamples / 3) * 3;
-    const usableBytes = usableSamples * 2;
-
-    carry = input.subarray(usableBytes);
-
-    if (usableSamples <= 0) return Buffer.alloc(0);
-
-    const outSamples = usableSamples / 3;
-    const out = Buffer.alloc(outSamples * 2);
-
-    let outIndex = 0;
-
-    for (let i = 0; i < outSamples; i++) {
-      const s1 = input.readInt16LE(i * 6);
-      const s2 = input.readInt16LE(i * 6 + 2);
-      const s3 = input.readInt16LE(i * 6 + 4);
-
-      const avg = Math.round((s1 + s2 + s3) / 3);
-
-      out.writeInt16LE(avg, outIndex);
-      outIndex += 2;
-    }
-
-    return out;
-  };
 }
 
 // ---------- Voice profile config ----------

@@ -15,7 +15,7 @@
     "build": "npm run build --workspace @ai-secretary/api && npm run build --workspace @ai-secretary/web",
     "start": "npm run start --workspace @ai-secretary/api",
     "voice:check": "node --check server.js",
-    "voice:test": "node --test scripts/voice-transcript.test.js scripts/outbound-call.test.js scripts/call-timing.test.js",
+    "voice:test": "node --test scripts/voice-transcript.test.js scripts/outbound-call.test.js scripts/call-timing.test.js scripts/audio-resampling.test.js",
     "api:test": "npm run test --workspace @ai-secretary/api",
     "test": "npm run voice:test && npm run api:test",
     "voice:start": "node server.js",
