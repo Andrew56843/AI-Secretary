@@ -496,6 +496,28 @@ function buildDefaultSummary(status: CallStatus, customerPhone: string) {
 
 function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult, action: z.infer<typeof calendarActionInputSchema>) {
   if (result.status === "availability") {
+    if (result.requestedSlot?.available) {
+      return [
+        `The caller's exact requested slot ${result.requestedSlot.startDateTime} - ${result.requestedSlot.endDateTime} was checked live and is available.`,
+        "Briefly confirm in Russian that this exact time is available, then collect any missing name or phone confirmation.",
+        "Do not say that the requested time is unavailable merely because the separate suggestion list is limited.",
+        "Do not claim that an appointment was created until CREATE succeeds."
+      ].join(" ");
+    }
+
+    if (result.requestedSlot && !result.requestedSlot.available) {
+      const alternatives = result.slots
+        .slice(0, 3)
+        .map((slot) => `${slot.startDateTime} - ${slot.endDateTime}`)
+        .join("; ");
+      return [
+        `The caller's exact requested slot ${result.requestedSlot.startDateTime} - ${result.requestedSlot.endDateTime} was checked live and is unavailable.`,
+        alternatives ? `Available alternatives: ${alternatives}.` : "No alternative slots were found in the requested range.",
+        "Briefly explain this in Russian and let the caller choose another time.",
+        "Do not invent a slot."
+      ].join(" ");
+    }
+
     if (!result.available) {
       return [
         "The connected Google Calendar was checked live and has no available slots in the requested range.",
@@ -508,6 +530,7 @@ function buildCalendarToolAssistantInstruction(result: CalendarAutomationResult,
     return [
       `The connected Google Calendar was checked live. Available slots in ${result.timeZone}: ${slots}.`,
       "Offer up to three of these slots in Russian and let the caller choose.",
+      "This is a limited suggestion list, not proof that every unlisted time is unavailable. Check any exact time named by the caller with another FIND_SLOTS call.",
       "Do not claim that an appointment was created until CREATE or RESCHEDULE succeeds."
     ].join(" ");
   }

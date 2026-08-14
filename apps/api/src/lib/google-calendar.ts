@@ -48,6 +48,7 @@ const calendarActionExtractionSchema = z.object({
   targetDate: z.string().trim().max(10).optional().nullable(),
   startDateTime: z.string().trim().max(80).optional().nullable(),
   endDateTime: z.string().trim().max(80).optional().nullable(),
+  requestedStartDateTime: z.string().trim().max(80).optional().nullable(),
   rangeStartDateTime: z.string().trim().max(80).optional().nullable(),
   rangeEndDateTime: z.string().trim().max(80).optional().nullable(),
   durationMinutes: z.coerce.number().int().min(5).max(8 * 60).optional().nullable(),
@@ -135,6 +136,12 @@ export type CalendarAutomationResult =
       reason: string;
       timeZone: string;
       gapMinutes: number;
+      requestedSlot?: {
+        startDateTime: string;
+        endDateTime: string;
+        available: boolean;
+        reason: string | null;
+      };
       slots: Array<{ startDateTime: string; endDateTime: string }>;
     }
   | {
@@ -243,11 +250,25 @@ function normalizePolicyTime(hoursText: string, minutesText?: string) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function extractDeterministicSchedulePolicy(assistantPrompt: string): CalendarSchedulePolicy {
+function normalizePolicyTimeWithDayPart(hoursText: string, minutesText?: string, dayPartText?: string) {
+  let hours = Number(hoursText);
+  const dayPart = String(dayPartText ?? "").toLowerCase();
+
+  if ((dayPart === "дня" || dayPart === "вечера") && hours < 12) hours += 12;
+  if (dayPart === "ночи" && hours === 12) hours = 0;
+
+  return normalizePolicyTime(String(hours), minutesText);
+}
+
+export function extractDeterministicSchedulePolicy(assistantPrompt: string): CalendarSchedulePolicy {
   const prompt = assistantPrompt.toLowerCase();
-  const gapMatch = prompt.match(
-    /(?:между\s+(?:клиентами|записями|визитами)|перерыв\s+между\s+(?:клиентами|записями|визитами))[^\d]{0,30}(\d{1,3})\s*(?:мин|минут)/iu
-  );
+  const gapMatch =
+    prompt.match(
+      /(?:между\s+(?:клиентами|записями|визитами)|перерыв\s+между\s+(?:клиентами|записями|визитами))[^\d]{0,30}(\d{1,3})\s*(?:мин|минут)/iu
+    ) ??
+    prompt.match(
+      /(\d{1,3})\s*(?:мин|минут)[^.!?\n]{0,50}(?:между\s+(?:клиентами|записями|визитами))/iu
+    );
   const gapMinutes = gapMatch ? Math.min(Number(gapMatch[1]), 240) : 0;
   const daysOfWeek = [1, 2, 3, 4, 5, 6, 7];
   const breaks: CalendarSchedulePolicy["breaks"] = [];
@@ -264,17 +285,68 @@ function extractDeterministicSchedulePolicy(assistantPrompt: string): CalendarSc
 
   const workingHours: CalendarSchedulePolicy["workingHours"] = [];
   const workMatch = prompt.match(
-    /(?:работаем|рабоч(?:ее\s+время|ие\s+часы)|принимаем\s+клиентов)[^\d]{0,30}(\d{1,2})(?:[:.](\d{2}))?\s*(?:до|[-–—])\s*(\d{1,2})(?:[:.](\d{2}))?/iu
+    /(?:работаем|рабоч(?:ее\s+время|ие\s+часы)|принимаем\s+клиентов)[^\d]{0,30}(\d{1,2})(?:[:.](\d{2}))?\s*(утра|дня|вечера|ночи)?\s*(?:до|[-–—])\s*(\d{1,2})(?:[:.](\d{2}))?\s*(утра|дня|вечера|ночи)?/iu
   );
   if (workMatch) {
-    const start = normalizePolicyTime(workMatch[1] ?? "", workMatch[2]);
-    const end = normalizePolicyTime(workMatch[3] ?? "", workMatch[4]);
+    const start = normalizePolicyTimeWithDayPart(workMatch[1] ?? "", workMatch[2], workMatch[3]);
+    const end = normalizePolicyTimeWithDayPart(workMatch[4] ?? "", workMatch[5], workMatch[6]);
     if (start && end && timeOfDayToMinutes(end) > timeOfDayToMinutes(start)) {
       workingHours.push({ daysOfWeek, date: null, start, end, label: "working hours" });
     }
   }
 
   return { gapMinutes, workingHours, breaks };
+}
+
+function parseExplicitTimeFromCallerTurn(turn: string) {
+  const clockMatch = turn.match(/(?:^|\D)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)/u);
+  const spacedClockMatch = turn.match(/(?:^|\D)([01]?\d|2[0-3])\s+([0-5]\d)(?!\d)/u);
+  const hourMatch = turn.match(
+    /(?:^|[\s,.;!?])(?:в|на|к|около)\s+([01]?\d|2[0-3])(?:\s*(?:час(?:а|ов)?))?(?:\s*(утра|дня|вечера|ночи))?/iu
+  );
+  const match = clockMatch ?? spacedClockMatch ?? hourMatch;
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] && /^\d{2}$/u.test(match[2]) ? match[2] : 0);
+  const dayPart = hourMatch === match ? String(match[2] ?? "").toLowerCase() : "";
+
+  if ((dayPart === "дня" || dayPart === "вечера") && hours < 12) hours += 12;
+  if (dayPart === "ночи" && hours === 12) hours = 0;
+
+  return { hours, minutes };
+}
+
+export function inferRequestedStartDateTime(
+  action: CalendarActionExtraction,
+  transcript: string | null | undefined
+) {
+  if (isValidDateTime(action.requestedStartDateTime)) {
+    return action.requestedStartDateTime!;
+  }
+  if (!isValidDateTime(action.rangeStartDateTime) || !isValidDateTime(action.rangeEndDateTime)) {
+    return null;
+  }
+
+  const callerTurns = Array.from(
+    String(transcript ?? "").matchAll(/(?:^|\n)\s*(?:User|Caller|Клиент)\s*:\s*([^\n]+)/giu),
+    (match) => match[1] ?? ""
+  );
+  let requestedTime: ReturnType<typeof parseExplicitTimeFromCallerTurn> = null;
+  for (let index = callerTurns.length - 1; index >= 0 && !requestedTime; index--) {
+    requestedTime = parseExplicitTimeFromCallerTurn(callerTurns[index]!);
+  }
+  if (!requestedTime) return null;
+
+  const baseMatch = action.rangeStartDateTime!.match(/^(\d{4}-\d{2}-\d{2})T.*?(Z|[+-]\d{2}:\d{2})$/u);
+  if (!baseMatch) return null;
+
+  const candidate = `${baseMatch[1]}T${String(requestedTime.hours).padStart(2, "0")}:${String(requestedTime.minutes).padStart(2, "0")}:00${baseMatch[2]}`;
+  const candidateMs = Date.parse(candidate);
+  const rangeStartMs = Date.parse(action.rangeStartDateTime!);
+  const rangeEndMs = Date.parse(action.rangeEndDateTime!);
+
+  return candidateMs >= rangeStartMs && candidateMs < rangeEndMs ? candidate : null;
 }
 
 async function extractSchedulePolicyFromPrompt(assistantPrompt: string | null | undefined) {
@@ -1015,6 +1087,7 @@ async function findAvailableCalendarSlots(params: {
   account: GoogleAccount;
   accessToken: string;
   action: CalendarActionExtraction;
+  requestedStartDateTime?: string | null;
   policy: CalendarSchedulePolicy;
   timeZone: string;
 }): Promise<CalendarAutomationResult> {
@@ -1044,6 +1117,38 @@ async function findAvailableCalendarSlots(params: {
     timeMax: new Date(rangeEndMs + gapMs).toISOString(),
     maxResults: 1000
   });
+
+  let requestedSlot: Extract<CalendarAutomationResult, { status: "availability" }>["requestedSlot"];
+  if (isValidDateTime(params.requestedStartDateTime)) {
+    const requestedStartMs = Date.parse(params.requestedStartDateTime!);
+    const requestedEndMs = requestedStartMs + durationMs;
+
+    if (requestedStartMs >= rangeStartMs && requestedEndMs <= rangeEndMs) {
+      const requestedStartDateTime = new Date(requestedStartMs).toISOString();
+      const requestedEndDateTime = new Date(requestedEndMs).toISOString();
+      const policyConflict = getSchedulePolicyConflict({
+        startDateTime: requestedStartDateTime,
+        endDateTime: requestedEndDateTime,
+        timeZone: params.timeZone,
+        policy: params.policy
+      });
+      const calendarConflict = events.some((event) =>
+        eventConflictsWithSlot({
+          event,
+          requestedStartMs,
+          requestedEndMs,
+          gapMinutes
+        })
+      );
+
+      requestedSlot = {
+        startDateTime: getReferenceDateTime(new Date(requestedStartMs), params.timeZone),
+        endDateTime: getReferenceDateTime(new Date(requestedEndMs), params.timeZone),
+        available: !policyConflict && !calendarConflict,
+        reason: policyConflict ?? (calendarConflict ? "CALENDAR_CONFLICT" : null)
+      };
+    }
+  }
 
   const stepMs = AVAILABILITY_STEP_MINUTES * 60 * 1000;
   let candidateStartMs = Math.ceil(rangeStartMs / stepMs) * stepMs;
@@ -1084,6 +1189,7 @@ async function findAvailableCalendarSlots(params: {
     reason: slots.length > 0 ? "AVAILABLE_SLOTS_FOUND" : "NO_AVAILABLE_SLOTS",
     timeZone: params.timeZone,
     gapMinutes,
+    requestedSlot,
     slots
   };
 }
@@ -1634,6 +1740,7 @@ export async function syncCalendarAction(input: {
       account: context.account,
       accessToken: context.accessToken,
       action: parsed.data,
+      requestedStartDateTime: inferRequestedStartDateTime(parsed.data, input.transcript),
       policy,
       timeZone: context.timeZone
     });

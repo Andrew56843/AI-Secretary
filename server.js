@@ -1851,7 +1851,7 @@ function buildCalendarToolInstruction(clientCfg) {
   return [
     'Use callsec_calendar_action with FIND_SLOTS to read the connected Google Calendar live before offering appointment times.',
     'Use FIND_APPOINTMENTS when the caller wants to cancel or move an existing appointment but does not remember its exact date or time. It searches only appointments matching the caller phone.',
-    'FIND_SLOTS requires rangeStartDateTime, rangeEndDateTime, and durationMinutes. Offer only slots returned by the tool.',
+    'FIND_SLOTS requires rangeStartDateTime, rangeEndDateTime, and durationMinutes. If the caller named an exact time, also set requestedStartDateTime to that exact ISO 8601 time. Offer only slots returned by the tool.',
     'The server also enforces working hours, lunch or other breaks, and the minimum gap between customers when those rules are written in the account scenario.',
     'For a new appointment, call FIND_SLOTS before CREATE. For a move, after identifying the existing appointment and collecting the new time, call RESCHEDULE directly. RESCHEDULE checks availability while excluding the appointment being moved. Do not call FIND_SLOTS first for a move, and never implement a move as CANCEL plus CREATE.',
     'У тебя подключён инструмент Google Calendar callsec_calendar_action.',
@@ -1860,6 +1860,7 @@ function buildCalendarToolInstruction(clientCfg) {
     'Не отправляй владельцу для подтверждения обычные записи, переносы и отмены. Передача владельцу нужна только для тупика, явной просьбы поговорить с человеком или ситуации вне сценария.',
     'Для CREATE нужны услуга, дата, время, имя и подтверждение номера.',
     'Результат FIND_SLOTS является только списком предложений, а не выбором клиента. Не выбирай слот самостоятельно.',
+    'Список предложений FIND_SLOTS может быть ограничен. Нельзя объявлять точное время занятым только потому, что его нет среди первых предложений: проверь названное клиентом время через requestedStartDateTime.',
     'Если клиент отверг предложенные окна или назвал другое время, не используй старый слот. Проверь новое время и попроси явно подтвердить точные дату и время перед CREATE.',
     'Для RESCHEDULE нужны старая дата/время, новая дата/время, имя или подтверждённый номер. Не спрашивай услугу и мастера заново, если можно найти старую запись по телефону и времени.',
     'При переносе найденной записи сразу вызывай RESCHEDULE с её старым и новым временем: этот вызов сам проверит занятость и не считает переносимую запись конфликтом.',
@@ -1917,6 +1918,10 @@ function buildCalendarToolDefinition() {
         endDateTime: {
           type: 'string',
           description: 'New appointment end time for CREATE or RESCHEDULE, ISO 8601 with UTC offset. Omit if unknown.',
+        },
+        requestedStartDateTime: {
+          type: 'string',
+          description: 'Exact time explicitly requested by the caller for FIND_SLOTS, ISO 8601 with UTC offset. Set this whenever the caller named a precise time.',
         },
         rangeStartDateTime: {
           type: 'string',
@@ -2901,6 +2906,7 @@ const audioServer = net.createServer((socket) => {
       'targetDate',
       'startDateTime',
       'endDateTime',
+      'requestedStartDateTime',
       'rangeStartDateTime',
       'rangeEndDateTime',
     ]) {
