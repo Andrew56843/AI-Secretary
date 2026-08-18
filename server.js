@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
+const { performance } = require('node:perf_hooks');
 const { exec } = require('child_process');
 const WebSocket = require('ws');
 
@@ -29,6 +30,7 @@ const {
 } = require('./outbound-call');
 const { createCallTiming, getCompletedCallSeconds } = require('./call-timing');
 const { createDownsampler24kTo8k } = require('./audio-resampling');
+const { getDueFrameCount, getNextTickDelayMs } = require('./audio-playout');
 
 const DEFAULT_ASTERISK_OUTGOING_DIR = process.env.ASTERISK_OUTGOING_DIR || '/var/spool/asterisk/outgoing';
 
@@ -83,9 +85,9 @@ const CONFIG = {
   inputPcmGain: Number(process.env.INPUT_PCM_GAIN || 1.4),
   asteriskFrameBytes: 320, // 20ms @ 8kHz mono s16le
   asteriskFrameMs: 20,
-  outboundStartBufferFrames: Number(process.env.OUTBOUND_START_BUFFER_FRAMES || 13),
-  outboundResumeBufferFrames: Number(process.env.OUTBOUND_RESUME_BUFFER_FRAMES || 6),
-  outboundSendFramesPerTick: Number(process.env.OUTBOUND_SEND_FRAMES_PER_TICK || 2),
+  outboundStartBufferFrames: Number(process.env.OUTBOUND_START_BUFFER_FRAMES || 40),
+  outboundResumeBufferFrames: Number(process.env.OUTBOUND_RESUME_BUFFER_FRAMES || 30),
+  outboundSendFramesPerTick: Number(process.env.OUTBOUND_SEND_FRAMES_PER_TICK || 3),
 
   vadThreshold: Number(process.env.VAD_THRESHOLD || 0.55),
   vadSilenceMs: Number(process.env.VAD_SILENCE_MS || 450),
@@ -2213,6 +2215,9 @@ const audioServer = net.createServer((socket) => {
   let outboundTimers = new Set();
   let outboundGeneration = 0;
   let outboundAssemble = Buffer.alloc(0);
+  let outboundNextFrameAtMs = 0;
+  let outboundUnderflowStartedAtMs = 0;
+  let outboundHasStarted = false;
 
   
   const START_BUFFER_FRAMES = Math.max(1, CONFIG.outboundStartBufferFrames);
@@ -2220,7 +2225,6 @@ const audioServer = net.createServer((socket) => {
   const SEND_FRAMES_PER_TICK = Math.max(1, CONFIG.outboundSendFramesPerTick);
 
   let responseAudioDone = false;
-  let playbackStarted = false;
 
   let pendingAssistantTranscript = '';
   let greetingSent = false;
@@ -2284,6 +2288,11 @@ const audioServer = net.createServer((socket) => {
     turns: {
       user: 0,
       assistant: 0,
+    },
+    playout: {
+      underflows: 0,
+      underflowMs: 0,
+      maxUnderflowMs: 0,
     },
     openaiUsage: [],
     closeReason: null,
@@ -2698,11 +2707,13 @@ const audioServer = net.createServer((socket) => {
 
   function clearOutboundAudio(reason = 'clear') {
     responseAudioDone = false;
-    playbackStarted = false;
     pendingFinalHangupReason = null;
     finalHangupTimer = null;
     outboundQueue = [];
     outboundAssemble = Buffer.alloc(0);
+    outboundNextFrameAtMs = 0;
+    outboundUnderflowStartedAtMs = 0;
+    outboundHasStarted = false;
     assistantPlaybackUntil = 0;
 
     for (const t of outboundTimers) clearTimeout(t);
@@ -2728,9 +2739,16 @@ const audioServer = net.createServer((socket) => {
       assistantPlaybackUntil = Math.max(assistantPlaybackUntil, Date.now()) + CONFIG.asteriskFrameMs;
     }
 
-    const needFrames = playbackStarted ? RESUME_BUFFER_FRAMES : START_BUFFER_FRAMES;
+    const needFrames = outboundHasStarted ? RESUME_BUFFER_FRAMES : START_BUFFER_FRAMES;
 
     if (!outboundPumping && outboundQueue.length >= needFrames) {
+      if (outboundUnderflowStartedAtMs) {
+        const underflowMs = Math.max(0, Date.now() - outboundUnderflowStartedAtMs);
+        summary.playout.underflowMs += underflowMs;
+        summary.playout.maxUnderflowMs = Math.max(summary.playout.maxUnderflowMs, underflowMs);
+        log('[AUDIO-OUT]', `buffer recovered after ${underflowMs}ms; queued=${outboundQueue.length}`);
+        outboundUnderflowStartedAtMs = 0;
+      }
       pumpOutbound();
     }
   }
@@ -2824,9 +2842,25 @@ const audioServer = net.createServer((socket) => {
     if (!outboundQueue.length) return;
 
     outboundPumping = true;
-    playbackStarted = true;
+    outboundHasStarted = true;
+    outboundNextFrameAtMs = performance.now();
 
     const myGeneration = outboundGeneration;
+
+    const scheduleNextTick = () => {
+      if (closed || myGeneration !== outboundGeneration || !outboundPumping) return;
+      const delayMs = getNextTickDelayMs({
+        nowMs: performance.now(),
+        nextFrameAtMs: outboundNextFrameAtMs,
+        maxDelayMs: CONFIG.asteriskFrameMs,
+      });
+      const timer = setTimeout(() => {
+        outboundTimers.delete(timer);
+        sendTick();
+      }, delayMs);
+
+      outboundTimers.add(timer);
+    };
 
     const sendTick = () => {
       if (closed || myGeneration !== outboundGeneration) {
@@ -2834,9 +2868,21 @@ const audioServer = net.createServer((socket) => {
         return;
       }
 
+      const nowMs = performance.now();
+      const dueFrames = getDueFrameCount({
+        nowMs,
+        nextFrameAtMs: outboundNextFrameAtMs,
+        frameMs: CONFIG.asteriskFrameMs,
+        maxFrames: SEND_FRAMES_PER_TICK,
+      });
+      if (!dueFrames) {
+        scheduleNextTick();
+        return;
+      }
+
       let sent = 0;
 
-      while (sent < SEND_FRAMES_PER_TICK && outboundQueue.length) {
+      while (sent < dueFrames && outboundQueue.length) {
         const chunk = outboundQueue.shift();
 
         try {
@@ -2857,23 +2903,24 @@ const audioServer = net.createServer((socket) => {
         sent += 1;
       }
 
+      outboundNextFrameAtMs += sent * CONFIG.asteriskFrameMs;
+
       if (!outboundQueue.length) {
         outboundPumping = false;
+        outboundNextFrameAtMs = 0;
 
         if (!responseAudioDone) {
-          playbackStarted = false;
-          log('[AUDIO-OUT]', 'underflow waiting for more audio');
+          outboundUnderflowStartedAtMs = Date.now();
+          summary.playout.underflows += 1;
+          log('[AUDIO-OUT]', `underflow waiting for more audio; count=${summary.playout.underflows}`);
+        } else {
+          outboundHasStarted = false;
         }
 
         return;
       }
 
-      const timer = setTimeout(() => {
-        outboundTimers.delete(timer);
-        sendTick();
-      }, CONFIG.asteriskFrameMs * SEND_FRAMES_PER_TICK);
-
-      outboundTimers.add(timer);
+      scheduleNextTick();
     };
 
     sendTick();
@@ -3262,7 +3309,6 @@ const audioServer = net.createServer((socket) => {
           responseActive = true;
           cancelRequested = false;
           responseAudioDone = false;
-          playbackStarted = false;
           currentResponseId = evt.response?.id || evt.response_id || null;
           pendingAssistantTranscript = '';
           log('[OA]', `response.created ${currentResponseId || ''}`.trim());
