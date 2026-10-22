@@ -1,0 +1,9 @@
+# Ubuntu 24.04 sudo supports anchored argument regular expressions.
+andrew ALL=(root) NOPASSWD: /usr/sbin/asterisk ^-rx channel redirect PJSIP/[A-Za-z0-9_.@-]+ from-ai-forward\,[0-9]+\,1$
+andrew ALL=(root) NOPASSWD: /usr/sbin/asterisk ^-rx channel request hangup PJSIP/[A-Za-z0-9_.@-]+$
+andrew ALL=(root) NOPASSWD: /usr/bin/install -d -o asterisk -g asterisk -m 0750 /var/spool/asterisk/outgoing /var/spool/asterisk/callsec-outgoing-staging
+andrew ALL=(root) NOPASSWD: /usr/bin/install ^-o asterisk -g asterisk -m 0640 /tmp/ai-secretary-[A-Za-z0-9_-]+[.]call /var/spool/asterisk/callsec-outgoing-staging/[.]ai-secretary-[A-Za-z0-9_-]+[.]call[.][0-9]+[.][0-9]+[.]tmp$
+andrew ALL=(root) NOPASSWD: /bin/mv ^-f /var/spool/asterisk/callsec-outgoing-staging/[.]ai-secretary-[A-Za-z0-9_-]+[.]call[.][0-9]+[.][0-9]+[.]tmp /var/spool/asterisk/outgoing/ai-secretary-[A-Za-z0-9_-]+[.]call$
+andrew ALL=(root) NOPASSWD: /bin/rm ^-f /var/spool/asterisk/callsec-outgoing-staging/[.]ai-secretary-[A-Za-z0-9_-]+[.]call[.][0-9]+[.][0-9]+[.]tmp$
+andrew ALL=(root) NOPASSWD: /usr/bin/test ^-f /var/spool/asterisk/outgoing_done/ai-secretary-[A-Za-z0-9_-]+[.]call$
+andrew ALL=(root) NOPASSWD: /bin/cat ^/var/spool/asterisk/outgoing_done/ai-secretary-[A-Za-z0-9_-]+[.]call$

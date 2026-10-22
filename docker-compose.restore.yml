@@ -1,0 +1,152 @@
+name: callsec
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=128MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=30
+      - -c
+      - max_parallel_workers_per_gather=0
+    environment:
+      POSTGRES_DB: ai_secretary
+      POSTGRES_USER: callsec
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U callsec -d ai_secretary"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    logging: *logging
+
+  api:
+    image: callsec-api:${SOURCE_COMMIT:?Set SOURCE_COMMIT to the deployed Git commit}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      labels:
+        org.opencontainers.image.revision: ${SOURCE_COMMIT}
+    labels:
+      org.opencontainers.image.revision: ${SOURCE_COMMIT}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=192
+      PORT: 4000
+      SOURCE_COMMIT: ${SOURCE_COMMIT}
+      DATABASE_URL: postgresql://callsec:${POSTGRES_PASSWORD}@db:5432/ai_secretary?schema=public&connection_limit=5&pool_timeout=20
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY}
+      CORS_ORIGIN: https://${PUBLIC_DOMAIN:-callsec.ru}
+      PUBLIC_WEB_URL: https://${PUBLIC_DOMAIN:-callsec.ru}
+      ADMIN_PHONES: ${ADMIN_PHONES:-+79054176285}
+      TRUST_PROXY_HOPS: 1
+      RATE_LIMIT_ENABLED: "true"
+      VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN:?Set VOICE_SERVICE_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_PROXY_URL: ${OPENAI_PROXY_URL:-}
+      SOCKS_PROXY_URL: ${SOCKS_PROXY_URL:-}
+      OPENAI_TTS_MODEL: ${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      PROMPT_EDITOR_MODEL: ${PROMPT_EDITOR_MODEL:-gpt-4o-mini}
+      CALL_RECORDINGS_ROOT: /home/andrew/ai/records
+      PHONE_VERIFICATION_CALL_NUMBER: ${PHONE_VERIFICATION_CALL_NUMBER:-+79952225212}
+      PHONE_VERIFICATION_TTL_SECONDS: ${PHONE_VERIFICATION_TTL_SECONDS:-300}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: https://${PUBLIC_DOMAIN:-callsec.ru}/api/integrations/google/oauth/callback
+      GOOGLE_CALENDAR_SCOPES: https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email
+    ports:
+      - "127.0.0.1:14000:4000"
+    volumes:
+      - type: bind
+        source: /home/andrew/ai/records
+        target: /home/andrew/ai/records
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/healthz').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    logging: *logging
+
+  web:
+    image: callsec-web:${SOURCE_COMMIT}
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ""
+      labels:
+        org.opencontainers.image.revision: ${SOURCE_COMMIT}
+    labels:
+      org.opencontainers.image.revision: ${SOURCE_COMMIT}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18080:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-callsec.ru}
+      ACME_EMAIL: ${ACME_EMAIL:-79054176285@yandex.ru}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: *logging
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,22 @@
+[Unit]
+Description=Callsec telephone AI AudioSocket service
+Wants=network-online.target asterisk.service
+After=network-online.target asterisk.service docker.service
+
+[Service]
+Type=simple
+User=andrew
+Group=andrew
+SupplementaryGroups=asterisk
+WorkingDirectory=/opt/callsec
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/callsec/voice.env
+ExecStart=/usr/local/bin/node /opt/callsec/server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=120
+LimitNOFILE=65535
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target
