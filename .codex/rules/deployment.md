@@ -34,7 +34,8 @@
   - Archived call status in `/var/spool/asterisk/outgoing_done`.
 - Because of that, do not move `server.js` into Docker until the Asterisk host integration is deliberately migrated.
 - SIP uses Novofon TLS port 5061 with server certificate verification. Local transport listens on 5071; RTP uses UDP 10000-10199.
-- The phone verification DID is `+79952225212`; `+79952225213` is available for customer rental.
+- Both DIDs are rentable. `+79952225212` is assigned to the owner and is also the verification DID; `+79952225213` remains available.
+- Verification intercepts only an incoming call from the exact caller with a pending unexpired request; all other calls follow normal profile routing.
 
 ## Git And Auto Deploy
 

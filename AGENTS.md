@@ -25,7 +25,8 @@
 - Pushing Git alone does not deploy. Pull the intended commit, rebuild changed containers and restart `callsec-voice` when voice source changes.
 - Production secrets are in `/etc/callsec` and the ignored `/opt/callsec/.env`; recovery copies on the PC are outside Git in `D:\Callsec-Private`.
 - Novofon uses verified SIP TLS port 5061; Timeweb blocks port 5060. See `deploy/asterisk`.
-- `+79952225212` is held for phone verification. `+79952225213` is the customer number pool.
+- Both `+79952225212` and `+79952225213` belong to the rental pool; `52-12` is assigned to the owner's inbound profile.
+- `52-12` also verifies registration/recovery: intercept only an incoming call from the exact caller with an unexpired pending request. Other calls use the normal AI profile.
 - Do not containerize `server.js` casually: it calls host Asterisk commands and uses `/var/spool/asterisk/*`, so Docker needs an explicit migration plan.
 
 ## Workflow

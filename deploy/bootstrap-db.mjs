@@ -10,11 +10,11 @@ if (!/^\+7\d{10}$/.test(input.phone || '') || !/^\d{6}$/.test(input.password || 
 try {
   const password = await hashPassword(input.password);
   const result = await prisma.$transaction(async (tx) => {
-    for (const [number, assigned] of [['+79952225212', true], ['+79952225213', false]]) {
+    for (const number of ['+79952225212', '+79952225213']) {
       await tx.reservedPhoneNumber.upsert({
         where: { number },
-        update: { providerDid: number.replace(/\D/g, ''), ...(assigned ? { assigned: true } : {}) },
-        create: { number, providerDid: number.replace(/\D/g, ''), assigned },
+        update: { providerDid: number.replace(/\D/g, '') },
+        create: { number, providerDid: number.replace(/\D/g, ''), assigned: false },
       });
     }
     let owner = await tx.user.findUnique({ where: { phone: input.phone } });

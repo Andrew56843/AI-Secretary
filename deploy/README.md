@@ -72,7 +72,11 @@ The API applies Prisma migrations before it starts. Do not run the development
 seed: it creates sample accounts and call logs. Add the two Novofon numbers
 `+79952225212` and `+79952225213` to the available number pool using the
 production provisioning procedure, then register the owner through the normal
-phone-verification flow.
+phone-verification flow. Both numbers remain rentable; `52-12` doubles as
+verification only for callers with a pending matching request. For the owner's
+explicit restoration, `deploy/restore-owner-number.mjs` attaches `52-12` to the
+inbound profile and grants a 30-day restoration period with a zero-value audit
+entry. It preserves the balance and does not overwrite prompts or integrations.
 
 The host voice service must use `PLATFORM_API_BASE_URL=http://127.0.0.1:14000` and
 the same `VOICE_SERVICE_TOKEN` as the API. The API mounts host recordings read

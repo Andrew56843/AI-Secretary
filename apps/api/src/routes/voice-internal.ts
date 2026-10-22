@@ -682,7 +682,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
         ? CallDirection.INBOUND
         : undefined;
 
-  if (isPhoneVerificationDid(parsed.data.did)) {
+  if (direction !== CallDirection.OUTBOUND && isPhoneVerificationDid(parsed.data.did)) {
     const verification = await completeLatestPhoneVerificationForCall(parsed.data.callerId);
     if (verification) {
       res.json({

@@ -47,8 +47,10 @@ AudioSocket 9019, metadata 9020 and API 14000 bound to loopback. Both DIDs must
 route to this SIP account in Novofon. Incoming requests can use
 `did_79952225212` / `did_79952225213`, the bare DID, or a called-number SIP
 header containing the configured DID. Calls to unknown numbers are rejected.
-The service DID 79952225212 is used for registration confirmation; do not
-add it to the rentable number pool.
+The DID 79952225212 is also used for registration/recovery confirmation and
+can be rented normally. The API intercepts only incoming calls from callers
+with a matching unexpired pending verification request. All other calls use
+the DID owner's AI scenario.
 
 For providers or networks that require it, explicit `sipTransport: "udp"`
 defaults to remote/local UDP 5060, and `sipTransport: "tcp"` defaults to remote
