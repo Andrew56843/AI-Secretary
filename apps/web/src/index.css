@@ -2194,20 +2194,44 @@ label {
   background: #ffffff;
 }
 
+body:has(.modal-backdrop) {
+  overflow: hidden;
+}
+
 .modal-backdrop {
+  --modal-gap: 1rem;
   position: fixed;
   inset: 0;
+  height: 100%;
+  height: 100dvh;
   z-index: 50;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
-  padding: 1rem;
+  padding: max(var(--modal-gap), env(safe-area-inset-top))
+    max(var(--modal-gap), env(safe-area-inset-right))
+    max(var(--modal-gap), env(safe-area-inset-bottom))
+    max(var(--modal-gap), env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   background: rgba(31, 34, 38, 0.28);
+}
+
+.modal-panel,
+.landing-auth-modal {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .modal-panel {
   position: relative;
   width: min(440px, 100%);
   display: grid;
+  grid-auto-rows: max-content;
   gap: 0.85rem;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2856,15 +2880,12 @@ label {
     padding-top: 0.7rem;
   }
 
-  .modal-backdrop.landing-auth-backdrop {
-    align-items: start;
-    overflow-y: auto;
-    padding: 0.55rem;
+  .modal-backdrop {
+    --modal-gap: 0.55rem;
   }
 
   .landing-auth-modal {
     width: 100%;
-    margin: 0.3rem 0 1rem;
   }
 
   .landing-auth-close {
