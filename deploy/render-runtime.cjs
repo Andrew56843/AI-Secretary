@@ -36,7 +36,7 @@ const integrations = {
   OPENAI_API_KEY: input.openaiApiKey,
   OPENAI_PROXY_URL: `socks5://${proxyAuthority}`,
   TELEGRAM_BOT_TOKEN: input.telegramBotToken,
-  TELEGRAM_PROXY_URL: `socks5://${proxyAuthority}`,
+  TELEGRAM_PROXY_URL: `socks://${proxyAuthority}`,
 };
 writeJson('internal-secrets.json', internal);
 fs.writeFileSync(path.join(outputPath, 'backup.key'), `${internal.backupKey}\n`, { mode: 0o600 });

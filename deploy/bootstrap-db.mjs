@@ -13,7 +13,7 @@ try {
     for (const [number, assigned] of [['+79952225212', true], ['+79952225213', false]]) {
       await tx.reservedPhoneNumber.upsert({
         where: { number },
-        update: { providerDid: number.replace(/\D/g, '') },
+        update: { providerDid: number.replace(/\D/g, ''), ...(assigned ? { assigned: true } : {}) },
         create: { number, providerDid: number.replace(/\D/g, ''), assigned },
       });
     }
