@@ -13,8 +13,9 @@ Prepare a root-readable JSON file outside the checkout with these fields:
 {
   "publicIp": "83.217.203.61",
   "sipHost": "sip.novofon.ru",
-  "sipPort": 5060,
-  "sipBindPort": 5060,
+  "sipTransport": "tls",
+  "sipPort": 5061,
+  "sipBindPort": 5071,
   "sipUsername": "SIP_LOGIN",
   "sipPassword": "SIP_PASSWORD",
   "metadataToken": "GENERATED_URL_SAFE_TOKEN_AT_LEAST_32_CHARACTERS",
@@ -36,13 +37,25 @@ systemctl restart asterisk
 systemctl start callsec-voice
 ```
 
-The installer configures SIP on UDP 5060 and RTP on UDP 10000-10199. Keep
+The installer configures SIP over TLS to Novofon TCP 5061, with a local TCP
+listener on 5071, and RTP on UDP 10000-10199. TLS verifies the provider's
+certificate against Ubuntu's CA bundle and allows valid wildcard certificates.
+Endpoint, registration and AoR outbound proxies explicitly choose TLS, so the
+voice engine's existing `sip:number@sip.novofon.ru` destination also uses TLS.
+PJSIP reuses an existing connection to the same destination. Keep
 AudioSocket 9019, metadata 9020 and API 14000 bound to loopback. Both DIDs must
 route to this SIP account in Novofon. Incoming requests can use
 `did_79952225212` / `did_79952225213`, the bare DID, or a called-number SIP
 header containing the configured DID. Calls to unknown numbers are rejected.
 The service DID 79952225212 is used for registration confirmation; do not
 add it to the rentable number pool.
+
+For providers or networks that require it, explicit `sipTransport: "udp"`
+defaults to remote/local UDP 5060, and `sipTransport: "tcp"` defaults to remote
+TCP 5065 and local TCP 5071. Override `sipPort` and `sipBindPort` together when
+necessary. Some cloud providers block traffic involving SIP port 5060; use
+TLS rather than disabling certificate verification. Changing the transport
+requires an Asterisk restart; a dialplan or PJSIP reload is insufficient.
 
 The AGI helper sends structured JSON to the metadata service before answering.
 If metadata is unavailable or it returns `HANGUP`, the dialplan ends the call.

@@ -20,8 +20,10 @@ function render(config, outputDirectory) {
   const sipUsername = configurationValue(config.sipUsername, 'sipUsername');
   if (!/^[a-z0-9_-]+$/i.test(sipUsername)) throw new Error('Invalid sipUsername');
   const sipPassword = configurationValue(config.sipPassword, 'sipPassword');
-  const sipPort = Number(config.sipPort || 5060);
-  const sipBindPort = Number(config.sipBindPort || 5060);
+  const sipTransport = String(config.sipTransport || 'tls').toLowerCase();
+  if (!['tls', 'tcp', 'udp'].includes(sipTransport)) throw new Error('sipTransport must be tls, tcp or udp');
+  const sipPort = Number(config.sipPort || (sipTransport === 'tls' ? 5061 : sipTransport === 'tcp' ? 5065 : 5060));
+  const sipBindPort = Number(config.sipBindPort || (sipTransport === 'udp' ? 5060 : 5071));
   for (const port of [sipPort, sipBindPort]) {
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid SIP port');
   }
@@ -38,6 +40,18 @@ function render(config, outputDirectory) {
     SIP_PASSWORD: sipPassword,
     SIP_PORT: String(sipPort),
     SIP_BIND_PORT: String(sipBindPort),
+    SIP_TRANSPORT: sipTransport,
+    SIP_SERVER_URI: `sip:${sipHost}:${sipPort}\\;transport=${sipTransport}`,
+    SIP_OUTBOUND_PROXY: `sip:${sipHost}:${sipPort}\\;transport=${sipTransport}\\;lr`,
+    TLS_OPTIONS: sipTransport === 'tls' ? [
+      'ca_list_file=/etc/ssl/certs/ca-certificates.crt',
+      'verify_server=yes',
+      'allow_wildcard_certs=yes',
+      'verify_client=no',
+      'require_client_cert=no',
+      'method=tlsv1_2',
+      'symmetric_transport=yes',
+    ].join('\n') : '',
   };
   fs.mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
   for (const fileName of ['pjsip.conf', 'extensions.conf']) {

@@ -4,11 +4,11 @@ Callsec should not accept paid customers until every required item below is veri
 
 ## Infrastructure
 
-- Node.js 24 is used for web/API builds and for the PM2 voice process.
+- Node.js 24 is used for web/API builds and for the systemd voice process.
 - PostgreSQL has automatic encrypted backups and a tested restore procedure.
 - `https://callsec.ru/healthz` or the routed API health endpoint is monitored.
 - Disk usage is monitored for `/home/andrew/ai/records` and database volumes.
-- PM2, Asterisk, Docker/Coolify, API errors, and failed transcript deliveries have alerts.
+- The voice systemd service, Asterisk, Docker, API errors, and failed transcript deliveries have alerts.
 
 ## Secrets
 
@@ -59,5 +59,5 @@ Callsec should not accept paid customers until every required item below is veri
 - Run `npm run lint`, `npm test`, `npm run build`, `npm run voice:check`, and `npm audit`.
 - Review database migrations and take a backup before deployment.
 - Deploy web/API from the intended Git commit and verify the running commit.
-- Deploy `server.js` separately to PM2, restart it, and run a real inbound and outbound smoke call.
+- Update the shared voice checkout, restart `callsec-voice`, and run a real inbound and outbound smoke call.
 - Keep a rollback artifact for the previous web/API image and voice-service file.

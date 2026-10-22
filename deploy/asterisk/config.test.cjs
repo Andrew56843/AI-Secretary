@@ -25,6 +25,11 @@ test('templates preserve the SIP URI separator and produce matching metadata', (
   const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
   const dialplan = fs.readFileSync(path.join(directory, 'extensions.conf'), 'utf8');
   assert.match(pjsip, /client_uri=sip:example_account@sip[.]novofon[.]ru/);
+  assert.match(pjsip, /protocol=tls\nbind=0[.]0[.]0[.]0:5071/);
+  assert.match(pjsip, /server_uri=sip:sip[.]novofon[.]ru:5061\\;transport=tls/);
+  assert.equal((pjsip.match(/outbound_proxy=sip:sip[.]novofon[.]ru:5061\\;transport=tls\\;lr/g) || []).length, 3);
+  assert.match(pjsip, /verify_server=yes/);
+  assert.match(pjsip, /allow_wildcard_certs=yes/);
   assert.match(dialplan, /\}@sip[.]novofon[.]ru,45/);
   assert.doesNotMatch(pjsip + dialplan, /@@[A-Z_]+@@/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'callsec-metadata.json'), 'utf8')), {
@@ -37,6 +42,17 @@ test('renderer refuses config injection and incomplete identity', () => {
     { sipHost: 'sip.example/invalid' }, { publicIp: 'not-an-ip' }]) {
     assert.throws(() => render({ ...example, ...override }, 'must-not-be-created'));
   }
+});
+
+test('UDP compatibility remains explicit and uses no TLS settings', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'callsec-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  render({ ...example, sipTransport: 'udp' }, directory);
+  const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
+  assert.match(pjsip, /protocol=udp\nbind=0[.]0[.]0[.]0:5060/);
+  assert.match(pjsip, /server_uri=sip:sip[.]novofon[.]ru:5060\\;transport=udp/);
+  assert.doesNotMatch(pjsip, /verify_server|ca_list_file/);
+  assert.throws(() => render({ ...example, sipTransport: 'bogus' }, directory), /sipTransport/);
 });
 
 test('DID identification accepts trunk aliases and rejects unconfigured numbers', () => {

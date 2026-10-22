@@ -19,7 +19,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y asterisk asterisk-modules ffmpeg sudo curl jq uuid-runtime
+apt-get install -y asterisk asterisk-modules ffmpeg sudo curl jq uuid-runtime ca-certificates
 if ! id andrew >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash andrew
 fi

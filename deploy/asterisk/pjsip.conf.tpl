@@ -3,13 +3,14 @@ type=global
 user_agent=Callsec
 endpoint_identifier_order=ip,username,anonymous
 
-[callsec-udp]
+[callsec-@@SIP_TRANSPORT@@]
 type=transport
-protocol=udp
+protocol=@@SIP_TRANSPORT@@
 bind=0.0.0.0:@@SIP_BIND_PORT@@
 external_signaling_address=@@PUBLIC_IP@@
 external_media_address=@@PUBLIC_IP@@
 local_net=127.0.0.0/8
+@@TLS_OPTIONS@@
 
 [novofon-auth]
 type=auth
@@ -19,17 +20,19 @@ password=@@SIP_PASSWORD@@
 
 [novofon-aor]
 type=aor
-contact=sip:@@SIP_HOST@@:@@SIP_PORT@@
+contact=@@SIP_SERVER_URI@@
+outbound_proxy=@@SIP_OUTBOUND_PROXY@@
 qualify_frequency=60
 
 [novofon-endpoint]
 type=endpoint
-transport=callsec-udp
+transport=callsec-@@SIP_TRANSPORT@@
 context=from-novofon
 disallow=all
 allow=alaw,ulaw
 aors=novofon-aor
 outbound_auth=novofon-auth
+outbound_proxy=@@SIP_OUTBOUND_PROXY@@
 from_domain=@@SIP_HOST@@
 direct_media=no
 rtp_symmetric=yes
@@ -52,9 +55,10 @@ srv_lookups=yes
 
 [novofon-registration]
 type=registration
-transport=callsec-udp
+transport=callsec-@@SIP_TRANSPORT@@
 outbound_auth=novofon-auth
-server_uri=sip:@@SIP_HOST@@:@@SIP_PORT@@
+outbound_proxy=@@SIP_OUTBOUND_PROXY@@
+server_uri=@@SIP_SERVER_URI@@
 client_uri=sip:@@SIP_USERNAME@@@@@SIP_HOST@@
 contact_user=@@SIP_USERNAME@@
 expiration=300

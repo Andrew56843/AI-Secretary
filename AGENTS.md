@@ -18,11 +18,14 @@
 
 ## Deployment
 
-- The Coolify application `ai-secretary` serves callsec.ru and builds from this Git repository.
-- Coolify currently deploys `web` and `api` from `docker-compose.server.yml`.
+- Current production host: `83.217.203.61`, Ubuntu 24.04. Source checkout: `/opt/callsec`.
+- `docker-compose.restore.yml` deploys PostgreSQL, API, web and Caddy HTTPS. The old Coolify compose remains for reference.
 - The production containers should show `SOURCE_COMMIT` matching the latest pushed commit.
-- The legacy voice service currently runs separately on the server as PM2 process `server` from `/home/andrew/ai/server.js`.
-- Do not assume that pushing `server.js` to Git updates the live voice service until the PM2/Asterisk voice deployment is migrated to a Git-backed workflow.
+- The host voice service is systemd `callsec-voice`, running `/opt/callsec/server.js` from the same Git checkout.
+- Pushing Git alone does not deploy. Pull the intended commit, rebuild changed containers and restart `callsec-voice` when voice source changes.
+- Production secrets are in `/etc/callsec` and the ignored `/opt/callsec/.env`; recovery copies on the PC are outside Git in `D:\Callsec-Private`.
+- Novofon uses verified SIP TLS port 5061; Timeweb blocks port 5060. See `deploy/asterisk`.
+- `+79952225212` is held for phone verification. `+79952225213` is the customer number pool.
 - Do not containerize `server.js` casually: it calls host Asterisk commands and uses `/var/spool/asterisk/*`, so Docker needs an explicit migration plan.
 
 ## Workflow
@@ -34,7 +37,7 @@
   - `npm run voice:check` for `server.js`.
   - `npm run lint` for web/API TypeScript checks.
   - `npm run build` before deployment-sensitive changes.
-- Commit and push intentional changes to `origin main` so Coolify can deploy them.
+- Commit and push intentional changes to `origin main`, then deploy the exact commit using `deploy/README.md`.
 
 ## Secrets And Logs
 

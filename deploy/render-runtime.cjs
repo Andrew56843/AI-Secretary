@@ -22,6 +22,7 @@ const internal = fs.existsSync(internalPath)
   ? JSON.parse(fs.readFileSync(internalPath, 'utf8'))
   : Object.fromEntries(['postgresPassword', 'jwtSecret', 'dataEncryptionKey', 'voiceServiceToken', 'metadataToken']
     .map((key) => [key, randomBytes(32).toString('hex')]));
+if (!internal.backupKey) internal.backupKey = randomBytes(32).toString('hex');
 
 function writeJson(name, value) {
   fs.writeFileSync(path.join(outputPath, name), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
@@ -35,9 +36,10 @@ const integrations = {
   OPENAI_API_KEY: input.openaiApiKey,
   OPENAI_PROXY_URL: `socks5://${proxyAuthority}`,
   TELEGRAM_BOT_TOKEN: input.telegramBotToken,
-  TELEGRAM_PROXY_URL: `http://${proxyAuthority}`,
+  TELEGRAM_PROXY_URL: `socks5://${proxyAuthority}`,
 };
 writeJson('internal-secrets.json', internal);
+fs.writeFileSync(path.join(outputPath, 'backup.key'), `${internal.backupKey}\n`, { mode: 0o600 });
 writeEnv('app.env', {
   PUBLIC_DOMAIN: 'callsec.ru',
   ACME_EMAIL: '79054176285@yandex.ru',
@@ -74,6 +76,8 @@ writeJson('asterisk-secrets.json', {
   sipPassword: input.sipPassword,
   sipHost: input.sipServer,
   sipPort: input.sipPort,
+  sipTransport: input.sipTransport || 'tls',
+  sipBindPort: input.sipBindPort || 5071,
   publicIp: input.host,
   metadataToken: internal.metadataToken,
   dids: ['79952225212', '79952225213'],

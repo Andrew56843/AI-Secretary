@@ -58,7 +58,7 @@ npm run voice:test
 
 ## Production
 
-`docker-compose.server.yml` deploys the web and API services. The API runs `prisma migrate deploy` before it starts. The Asterisk voice service currently runs separately under PM2 because it needs host Asterisk commands and spool directories.
+`docker-compose.restore.yml` deploys PostgreSQL, web, API and Caddy HTTPS on the restored server. The API runs `prisma migrate deploy` before it starts. The Asterisk voice service runs separately under systemd from the same `/opt/callsec` Git checkout because it needs host Asterisk commands and spool directories. See [deploy/README.md](deploy/README.md). The earlier Coolify compose is retained as an alternative deployment definition.
 
 Create production secrets independently. In particular, do not reuse `JWT_SECRET`, `DATA_ENCRYPTION_KEY`, or `VOICE_SERVICE_TOKEN`. Google OAuth tokens are encrypted with AES-256-GCM using `DATA_ENCRYPTION_KEY`; legacy encrypted values remain readable during key separation.
 

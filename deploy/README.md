@@ -95,7 +95,10 @@ Check the image/container revision labels and health endpoints after each
 deployment.
 
 PostgreSQL and TLS certificates persist in named Docker volumes. Container logs
-are rotated automatically. Take PostgreSQL dumps and copy them off the server,
-together with the private environment, host Asterisk configuration, and call
-recordings. Keep encryption keys with the corresponding database backups.
+are rotated automatically. Install the [nightly encrypted backup service](backup/README.md)
+after restoration. It backs up PostgreSQL, runtime secrets, and Asterisk
+configuration at 03:30 Moscow time and retains seven days locally. Copy its
+initial archive and separate encryption key to private off-server storage.
+Call recordings require a separate backup; they are not included in the
+nightly database/configuration archive.
 `docker compose down` preserves data, but `down --volumes` destroys it.

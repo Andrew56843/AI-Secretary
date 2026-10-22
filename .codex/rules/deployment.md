@@ -13,18 +13,19 @@
 ## Production
 
 - Public site: `https://callsec.ru`.
-- Coolify app name/resource: `ai-secretary`.
-- Coolify app UUID observed on the server: `q10g7iuizo8l4ojk716d4vww`.
-- Coolify compose source: `docker-compose.server.yml`.
-- Production app currently has two Git-backed services:
+- Current server: `83.217.203.61`, Ubuntu 24.04, checkout `/opt/callsec`.
+- Production compose: `docker-compose.restore.yml`, no Coolify on this small server.
+- Production app has Git-backed services:
   - `web`: React/Vite build served by nginx.
   - `api`: Express/Prisma backend.
+- PostgreSQL 16 and Caddy HTTPS run in the same compose project.
 - The API has read-only access to call recordings through `/home/andrew/ai/records`.
 
 ## Voice Service
 
 - `server.js` is the voice service entrypoint.
-- Live legacy process: PM2 process `server`, running `/home/andrew/ai/server.js`.
+- Host process: systemd `callsec-voice`, running `/opt/callsec/server.js`.
+- Voice environment: `/etc/callsec/voice.env`.
 - It listens on AudioSocket and metadata ports, normally `127.0.0.1:9019` and `127.0.0.1:9020`.
 - It integrates with the SaaS API through `PLATFORM_API_BASE_URL` and `VOICE_SERVICE_TOKEN`.
 - It depends on host Asterisk:
@@ -32,10 +33,14 @@
   - Outbound call files in `/var/spool/asterisk/outgoing`.
   - Archived call status in `/var/spool/asterisk/outgoing_done`.
 - Because of that, do not move `server.js` into Docker until the Asterisk host integration is deliberately migrated.
+- SIP uses Novofon TLS port 5061 with server certificate verification. Local transport listens on 5071; RTP uses UDP 10000-10199.
+- The phone verification DID is `+79952225212`; `+79952225213` is available for customer rental.
 
 ## Git And Auto Deploy
 
-- Pushing to `origin main` updates the Git source used by Coolify.
+- Pushing to `origin main` updates the source repository; deployment is explicit on the new server.
 - Verify production deployment by checking that the running containers expose the latest `SOURCE_COMMIT`.
-- Root `server.js` is tracked by Git, but the live PM2 voice process does not automatically update from Git yet.
+- Pull the desired commit in `/opt/callsec`, update `SOURCE_COMMIT` in the production environment, build API/web sequentially and run compose up.
+- Restart `callsec-voice` after voice source or its environment changes. All host templates and services are versioned under `deploy/`.
+- Nightly encrypted database/configuration backups are installed from `deploy/backup`. Their separate key and off-server recovery copies belong outside Git.
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Callsec nightly at 03:30 Moscow time
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Europe/Moscow
+Persistent=true
+AccuracySec=1min
+Unit=callsec-backup.service
+
+[Install]
+WantedBy=timers.target
