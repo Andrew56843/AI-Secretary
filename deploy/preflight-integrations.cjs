@@ -6,6 +6,7 @@ const https = require('node:https');
 const dotenv = require('dotenv');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const WebSocket = require('ws');
 
 const env = dotenv.parse(fs.readFileSync(process.argv[2] || '.env'));
 function proxyAgent(value) {
@@ -39,6 +40,34 @@ async function check(name, run) {
   }
 }
 Promise.all([
+  process.argv.includes('--realtime') ? check('Realtime session via proxy', () => new Promise((resolve, reject) => {
+    const socket = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime-2', {
+      agent: proxyAgent(env.OPENAI_PROXY_URL),
+      headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      handshakeTimeout: 20000,
+    });
+    let settled = false;
+    const timeout = setTimeout(() => finish(new Error('Timeout')), 25000);
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) { socket.terminate(); reject(error); }
+      else { socket.close(); resolve({ ok: true, model: 'gpt-realtime-2', audioGenerated: false }); }
+    }
+    socket.on('error', finish);
+    socket.on('close', () => { if (!settled) finish(new Error('Session closed before creation')); });
+    socket.on('message', (data) => {
+      let event;
+      try { event = JSON.parse(data.toString()); } catch { return; }
+      if (event.type === 'session.created') finish();
+      if (event.type === 'error') {
+        const error = new Error('Realtime rejected the session');
+        error.code = event.error?.code || 'REALTIME_REJECTED';
+        finish(error);
+      }
+    });
+  })) : Promise.resolve(),
   check('OpenAI via proxy', async () => {
     const { status, json } = await requestJson('https://api.openai.com/v1/models', proxyAgent(env.OPENAI_PROXY_URL),
       { Authorization: `Bearer ${env.OPENAI_API_KEY}` });
