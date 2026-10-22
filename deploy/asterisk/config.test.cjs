@@ -30,6 +30,8 @@ test('templates preserve the SIP URI separator and produce matching metadata', (
   assert.equal((pjsip.match(/outbound_proxy=sip:sip[.]novofon[.]ru:5061\\;transport=tls\\;lr/g) || []).length, 3);
   assert.match(pjsip, /verify_server=yes/);
   assert.match(pjsip, /allow_wildcard_certs=yes/);
+  assert.match(pjsip, /allow=alaw,ulaw\nmedia_encryption=sdes\n/);
+  assert.doesNotMatch(pjsip, /media_encryption_optimistic\s*=\s*yes/);
   assert.match(dialplan, /\}@sip[.]novofon[.]ru,45/);
   assert.doesNotMatch(pjsip + dialplan, /@@[A-Z_]+@@/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'callsec-metadata.json'), 'utf8')), {
@@ -51,8 +53,26 @@ test('UDP compatibility remains explicit and uses no TLS settings', (t) => {
   const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
   assert.match(pjsip, /protocol=udp\nbind=0[.]0[.]0[.]0:5060/);
   assert.match(pjsip, /server_uri=sip:sip[.]novofon[.]ru:5060\\;transport=udp/);
+  assert.match(pjsip, /media_encryption=no\n/);
+  assert.doesNotMatch(pjsip, /media_encryption_optimistic\s*=\s*yes/);
   assert.doesNotMatch(pjsip, /verify_server|ca_list_file/);
   assert.throws(() => render({ ...example, sipTransport: 'bogus' }, directory), /sipTransport/);
+});
+
+test('TCP signaling does not enable SRTP or an optimistic fallback', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'callsec-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  render({ ...example, sipTransport: 'tcp' }, directory);
+  const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
+  assert.match(pjsip, /protocol=tcp\nbind=0[.]0[.]0[.]0:5071/);
+  assert.match(pjsip, /server_uri=sip:sip[.]novofon[.]ru:5065\\;transport=tcp/);
+  assert.match(pjsip, /media_encryption=no\n/);
+  assert.doesNotMatch(pjsip, /media_encryption_optimistic\s*=\s*yes|verify_server|ca_list_file/);
+});
+
+test('the host explicitly loads the SRTP module', () => {
+  const modules = fs.readFileSync(path.join(__dirname, 'modules.conf'), 'utf8');
+  assert.match(modules, /^load=res_srtp[.]so$/m);
 });
 
 test('DID identification accepts trunk aliases and rejects unconfigured numbers', () => {

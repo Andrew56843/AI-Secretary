@@ -41,6 +41,7 @@ function render(config, outputDirectory) {
     SIP_PORT: String(sipPort),
     SIP_BIND_PORT: String(sipBindPort),
     SIP_TRANSPORT: sipTransport,
+    MEDIA_ENCRYPTION: sipTransport === 'tls' ? 'sdes' : 'no',
     SIP_SERVER_URI: `sip:${sipHost}:${sipPort}\\;transport=${sipTransport}`,
     SIP_OUTBOUND_PROXY: `sip:${sipHost}:${sipPort}\\;transport=${sipTransport}\\;lr`,
     TLS_OPTIONS: sipTransport === 'tls' ? [

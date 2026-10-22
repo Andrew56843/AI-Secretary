@@ -30,6 +30,7 @@ transport=callsec-@@SIP_TRANSPORT@@
 context=from-novofon
 disallow=all
 allow=alaw,ulaw
+media_encryption=@@MEDIA_ENCRYPTION@@
 aors=novofon-aor
 outbound_auth=novofon-auth
 outbound_proxy=@@SIP_OUTBOUND_PROXY@@

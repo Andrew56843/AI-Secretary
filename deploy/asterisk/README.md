@@ -40,6 +40,9 @@ systemctl start callsec-voice
 The installer configures SIP over TLS to Novofon TCP 5061, with a local TCP
 listener on 5071, and RTP on UDP 10000-10199. TLS verifies the provider's
 certificate against Ubuntu's CA bundle and allows valid wildcard certificates.
+Novofon's TLS connection also requires SRTP with SDES keys inside the encrypted
+SDP. The endpoint uses `media_encryption=sdes`, and `modules.conf` explicitly
+loads `res_srtp.so`. No optimistic plaintext media fallback is enabled.
 Endpoint, registration and AoR outbound proxies explicitly choose TLS, so the
 voice engine's existing `sip:number@sip.novofon.ru` destination also uses TLS.
 PJSIP reuses an existing connection to the same destination. Keep
@@ -55,7 +58,9 @@ the DID owner's AI scenario.
 For providers or networks that require it, explicit `sipTransport: "udp"`
 defaults to remote/local UDP 5060, and `sipTransport: "tcp"` defaults to remote
 TCP 5065 and local TCP 5071. Override `sipPort` and `sipBindPort` together when
-necessary. Some cloud providers block traffic involving SIP port 5060; use
+necessary. These UDP/TCP configurations use `media_encryption=no`; SDES keys
+must not be exposed over unencrypted SIP. Some cloud providers block traffic
+involving SIP port 5060; use
 TLS rather than disabling certificate verification. Changing the transport
 requires an Asterisk restart; a dialplan or PJSIP reload is insufficient.
 
@@ -74,6 +79,7 @@ passwordless sudo.
 
 ```bash
 asterisk -rx 'module show like audiosocket'
+asterisk -rx 'module show like res_srtp'
 asterisk -rx 'core show application AudioSocket'
 asterisk -rx 'pjsip show registrations'
 asterisk -rx 'dialplan show callsec-audio'
@@ -89,5 +95,8 @@ existing calls finish. A Git pull alone does not reload a running Node process.
 
 Official references: [AudioSocket](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
 and [outbound registration](https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/Configuring-Outbound-Registrations/).
+Novofon's [TLS/SRTP setup](https://novofon.com/instructions/calls/freepbx1415-voip/)
+requires SRTP via in-SDP keys, configured by Asterisk's
+[`media_encryption=sdes`](https://docs.asterisk.org/Asterisk_20_Documentation/API_Documentation/Module_Configuration/res_pjsip/#media_encryption).
 `max_retries=0` disables retry attempts; this configuration uses a high explicit
 retry count and temporary handling of authentication rejection.
