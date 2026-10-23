@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check, Copy, Phone } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AuthPanel } from "./AuthPage";
 import type { AuthResponse } from "../types";
@@ -6,6 +7,9 @@ import type { AuthResponse } from "../types";
 type LandingPageProps = {
   onAuthorized: (data: AuthResponse) => void;
 };
+
+const DEMO_PHONE = "+79952225212";
+const DEMO_PHONE_DISPLAY = "+7 995 222-52-12";
 
 const LANDING_POINTS = [
   "Входящие звонки принимает AI-секретарь",
@@ -81,7 +85,7 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
         <div className="landing-scene" aria-hidden="true">
           <div className="scene-phone">
             <span />
-            <strong>+7 495 001 00 01</strong>
+            <strong>{DEMO_PHONE_DISPLAY}</strong>
             <em>AI секретарь на линии</em>
           </div>
           <div className="scene-wave">
@@ -149,16 +153,50 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
           <p className="eyebrow landing-domain">демонстрация</p>
           <h2>Видео и аудио примеры работы</h2>
         </div>
+        <div className="landing-demo-call" role="group" aria-label="Тестовый номер AI-секретаря">
+          <div className="landing-demo-call-details">
+            <span className="eyebrow">Тестовый звонок</span>
+            <a className="landing-demo-phone" href={`tel:${DEMO_PHONE}`}>
+              {DEMO_PHONE_DISPLAY}
+            </a>
+          </div>
+          <div className="landing-demo-call-actions">
+            <a className="landing-demo-call-link" href={`tel:${DEMO_PHONE}`}>
+              <Phone size={18} aria-hidden="true" />
+              Позвонить
+            </a>
+            <button
+              className={`outline-btn landing-demo-copy${copiedContact === "demo-phone" ? " copied" : ""}`}
+              type="button"
+              aria-label="Скопировать тестовый номер"
+              title={copiedContact === "demo-phone" ? "Скопировано" : "Скопировать номер"}
+              onClick={() => void copyContact("demo-phone", DEMO_PHONE)}
+            >
+              {copiedContact === "demo-phone" ? <Check size={18} aria-hidden="true" /> : <Copy size={18} aria-hidden="true" />}
+            </button>
+          </div>
+          <span className="sr-only" aria-live="polite">
+            {copiedContact === "demo-phone" ? "Тестовый номер скопирован" : ""}
+          </span>
+        </div>
         <div className="landing-demo-grid">
           <article className="landing-video-demo">
-            <div className="landing-video-frame">
-              <div className="landing-play-mark" aria-hidden="true">
-                <span />
-              </div>
-              <div>
-                <strong>Видео демонстрация</strong>
-                <p>Как callsec принимает звонок, ведет сценарий и сохраняет результат в кабинете.</p>
-              </div>
+            <video
+              className="landing-video-player"
+              controls
+              playsInline
+              preload="none"
+              poster="/media/callsec-demo-poster.jpg"
+              width={540}
+              height={960}
+              aria-label="Видеодемонстрация работы AI-секретаря callsec"
+            >
+              <source src="/media/callsec-demo.mp4" type="video/mp4" />
+              <a href="/media/callsec-demo.mp4">Скачать видеодемонстрацию</a>
+            </video>
+            <div className="landing-video-caption">
+              <strong>Видеодемонстрация</strong>
+              <p>Живой звонок с AI-секретарём callsec.</p>
             </div>
           </article>
           <article className="landing-audio-demo">
@@ -175,7 +213,10 @@ export function LandingPage({ onAuthorized }: LandingPageProps) {
               <span />
               <span />
             </div>
-            <audio className="landing-audio-control" controls preload="none" aria-label="Аудио демонстрация callsec" />
+            <audio className="landing-audio-control" controls preload="none" aria-label="Аудио демонстрация callsec">
+              <source src="/media/callsec-demo-audio.mp3" type="audio/mpeg" />
+              <a href="/media/callsec-demo-audio.mp3">Скачать аудиодемонстрацию</a>
+            </audio>
           </article>
         </div>
       </section>
