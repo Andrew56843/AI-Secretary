@@ -67,5 +67,6 @@ apt-get clean
 node --version
 docker --version
 docker compose version
+docker network inspect callsec-edge >/dev/null 2>&1 || docker network create callsec-edge
 df -h /
 free -h

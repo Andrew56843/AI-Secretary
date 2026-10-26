@@ -17,3 +17,5 @@
         reverse_proxy web:80
     }
 }
+
+import /data/sites/*.caddy

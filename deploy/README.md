@@ -59,6 +59,7 @@ Run from the Git checkout:
 
 ```sh
 mkdir -p /home/andrew/ai/records
+docker network inspect callsec-edge >/dev/null 2>&1 || docker network create callsec-edge
 docker compose -f docker-compose.restore.yml config --quiet
 docker compose -f docker-compose.restore.yml build api
 docker compose -f docker-compose.restore.yml build web
@@ -97,6 +98,20 @@ build `api` and `web` sequentially as above and run
 restart the host voice service from the same checkout after active calls end.
 Check the image/container revision labels and health endpoints after each
 deployment.
+
+### Shared HTTPS Edge
+
+Only Caddy joins the external `callsec-edge` network. Other applications may
+attach their frontend to it using a unique alias; their databases and APIs must
+remain on their own private networks. Additional site definitions are imported
+from `/data/sites/*.caddy` in Caddy's persistent data volume. Keep the original
+site files with each application's deployment configuration and include them in
+that application's backup. Never mount its storage or secrets into Callsec.
+
+For example, the separate CRM deployment uses `crm-frontend:80` and
+`crm.callsec.ru`. Install its site definition only after the CRM passes its own
+health and login checks. Validate and reload/recreate Caddy without restarting
+Callsec's API, database, or host voice service.
 
 PostgreSQL and TLS certificates persist in named Docker volumes. Container logs
 are rotated automatically. Install the [nightly encrypted backup service](backup/README.md)

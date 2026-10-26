@@ -144,7 +144,15 @@ services:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - default
+      - edge
     logging: *logging
+
+networks:
+  edge:
+    external: true
+    name: callsec-edge
 
 volumes:
   postgres_data:
