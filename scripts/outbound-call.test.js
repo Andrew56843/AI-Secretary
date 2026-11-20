@@ -43,3 +43,22 @@ test('refuses to create an outbound call without a client number', () => {
       /Client reserved number is required/
   );
 });
+
+test('preserves the selected inbound scenario when the API authorizes a service test caller ID', () => {
+  const profile = {
+    assistantProfileId: 'inbound-test-profile',
+    clientId: 'inbound-test-profile',
+    direction: 'INBOUND',
+    reservedNumber: null,
+    outboundCallerId: '+79952225212',
+  };
+
+  const content = buildOutboundCallFile({ ...baseCall, profile });
+
+  assert.match(content, /^CallerID: "AI Secretary" <79952225212>$/m);
+  assert.match(content, /^Setvar: AI_DID=79952225212$/m);
+  assert.match(content, /^Setvar: AI_CALLER=79054176285$/m);
+  assert.match(content, /^Setvar: AI_DIRECTION=INBOUND$/m);
+  assert.match(content, /^Setvar: AI_ASSISTANT_PROFILE_ID=inbound-test-profile$/m);
+  assert.match(content, /^Setvar: AI_CLIENT_ID=inbound-test-profile$/m);
+});

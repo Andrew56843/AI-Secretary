@@ -48,6 +48,7 @@ services:
       CALL_RECORDINGS_ROOT: ${CALL_RECORDINGS_ROOT:-/home/andrew/ai/records}
       PHONE_VERIFICATION_CALL_NUMBER: ${PHONE_VERIFICATION_CALL_NUMBER:-+79952225212}
       PHONE_VERIFICATION_TTL_SECONDS: ${PHONE_VERIFICATION_TTL_SECONDS:-300}
+      TEST_CALLER_ID: ${TEST_CALLER_ID:-}
     volumes:
       - ./:/app
       - node_modules_dev:/app/node_modules

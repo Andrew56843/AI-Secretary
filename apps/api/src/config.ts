@@ -36,6 +36,7 @@ const envSchema = z.object({
   OPENAI_TTS_MODEL: z.string().trim().min(1).default("gpt-4o-mini-tts"),
   CALL_RECORDINGS_ROOT: z.string().trim().min(1).default("/home/andrew/ai/records"),
   PHONE_VERIFICATION_CALL_NUMBER: z.string().trim().min(1).default("+79952225212"),
+  TEST_CALLER_ID: optionalString,
   PHONE_VERIFICATION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   TELEGRAM_BOT_TOKEN: optionalString,
   TELEGRAM_PROXY_URL: optionalString,

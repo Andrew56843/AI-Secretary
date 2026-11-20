@@ -1584,7 +1584,9 @@ async function outboundDialerTick() {
   try {
     await scanOutboundDoneFiles();
 
-    while (outboundInFlight.size < Math.max(1, CONFIG.outboundMaxConcurrent)) {
+    const maxConcurrent = Math.max(1, CONFIG.outboundMaxConcurrent);
+    // Rejected jobs must not keep one tick running indefinitely.
+    for (let claims = 0; claims < maxConcurrent && outboundInFlight.size < maxConcurrent; claims += 1) {
       const next = await requestPlatformOutboundJob();
       if (!next) break;
 

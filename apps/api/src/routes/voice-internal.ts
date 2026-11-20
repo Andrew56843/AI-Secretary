@@ -14,6 +14,7 @@ import {
   type CalendarAutomationResult
 } from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
+import { isOwnerTestDestination, resolveOutboundCallerId } from "../lib/outbound-caller-id.js";
 import { normalizePhone } from "../lib/phone.js";
 import {
   completeLatestPhoneVerificationForCall,
@@ -309,7 +310,7 @@ async function releaseOutboundContactWithoutAttempt(tx: Prisma.TransactionClient
       activeCallUuid: null,
       activeCallStartedAt: null,
       status: OutboundContactStatus.PENDING,
-      nextAttemptAt: null
+      nextAttemptAt: new Date(Date.now() + 60_000)
     }
   });
 
@@ -682,7 +683,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
         ? CallDirection.INBOUND
         : undefined;
 
-  if (direction !== CallDirection.OUTBOUND && isPhoneVerificationDid(parsed.data.did)) {
+  if (!parsed.data.outboundContactId && direction !== CallDirection.OUTBOUND && isPhoneVerificationDid(parsed.data.did)) {
     const verification = await completeLatestPhoneVerificationForCall(parsed.data.callerId);
     if (verification) {
       res.json({
@@ -723,8 +724,54 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
   }
 
   const now = new Date();
-  if (profile.user.numberRentExpiresAt && profile.user.numberRentExpiresAt < now) {
+  const [inboundProfile, outboundContact] = await Promise.all([
+    profile.mode === CallDirection.OUTBOUND
+      ? prisma.assistantProfile.findUnique({
+          where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
+          include: { reservedNumber: true }
+        })
+      : null,
+    parsed.data.outboundContactId
+      ? prisma.outboundContact.findFirst({
+          where: { id: parsed.data.outboundContactId, userId: profile.userId },
+          select: { id: true, phone: true, attempts: true, queuedForCall: true, callMode: true }
+        })
+      : null
+  ]);
+  const reservedNumber =
+    profile.mode === CallDirection.INBOUND
+      ? profile.reservedNumber?.number
+      : inboundProfile?.status === ProfileStatus.ACTIVE
+        ? inboundProfile.reservedNumber?.number
+        : null;
+  const isVerifiedOwnerTest = Boolean(
+    outboundContact?.queuedForCall &&
+      outboundContact.callMode === profile.mode &&
+      isOwnerTestDestination(profile.user.phone, outboundContact.phone) &&
+      isOwnerTestDestination(profile.user.phone, parsed.data.callerId ?? "")
+  );
+  const outboundCallerId = outboundContact
+    ? resolveOutboundCallerId({
+        ownerPhone: profile.user.phone,
+        destinationPhone: outboundContact.phone,
+        reservedNumber,
+        numberRentExpiresAt: profile.user.numberRentExpiresAt,
+        testCallerId: isVerifiedOwnerTest ? env.TEST_CALLER_ID : undefined,
+        now
+      })
+    : null;
+
+  if (
+    profile.user.numberRentExpiresAt &&
+    profile.user.numberRentExpiresAt <= now &&
+    !(isVerifiedOwnerTest && outboundCallerId)
+  ) {
     res.status(402).json({ message: "Reserved number rent has expired" });
+    return;
+  }
+
+  if (outboundContact && !outboundCallerId) {
+    res.status(409).json({ message: "Нет доступного номера для этого звонка" });
     return;
   }
 
@@ -752,21 +799,6 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
   }
 
   warmCalendarSchedulePolicy(profile.prompt);
-
-  const [inboundProfile, outboundContact] = await Promise.all([
-    direction === CallDirection.OUTBOUND
-      ? prisma.assistantProfile.findUnique({
-          where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
-          include: { reservedNumber: true }
-        })
-      : null,
-    parsed.data.outboundContactId
-      ? prisma.outboundContact.findFirst({
-          where: { id: parsed.data.outboundContactId, userId: profile.userId },
-          select: { id: true, phone: true, attempts: true }
-        })
-      : null
-  ]);
 
   const contactName = outboundContact
     ? await prisma.phoneContactName.findUnique({
@@ -817,16 +849,12 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     ok: true,
     call: {
       uuid: parsed.data.uuid ?? null,
-      did:
-        parsed.data.did ??
-        (direction === CallDirection.OUTBOUND
-          ? inboundProfile?.reservedNumber?.number ?? profile.reservedNumber?.number ?? null
-          : profile.reservedNumber?.number ?? inboundProfile?.reservedNumber?.number ?? null),
+      did: parsed.data.did ?? outboundCallerId ?? reservedNumber ?? null,
       callerId: parsed.data.callerId ?? null
     },
     profile: mapProfileToVoiceConfig(profile, {
       direction,
-      outboundCallerId: inboundProfile?.reservedNumber?.number ?? null,
+      outboundCallerId: outboundCallerId ?? reservedNumber ?? null,
       outboundContact: outboundContact
         ? {
             id: outboundContact.id,
@@ -885,7 +913,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
                   status: ProfileStatus.ACTIVE
                 },
                 select: {
-                  reservedNumberId: true
+                  reservedNumber: { select: { number: true } }
                 }
               }
             }
@@ -896,16 +924,15 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
       });
 
       for (const candidate of candidates) {
-        const candidatePhone = normalizePhone(candidate.phone);
-        const ownerPhone = normalizePhone(candidate.user.phone);
-        const isTestCall = Boolean(candidatePhone && ownerPhone && candidatePhone === ownerPhone);
-        const hasActiveReservedNumber = Boolean(
-          candidate.user.numberRentExpiresAt &&
-            candidate.user.numberRentExpiresAt > now &&
-            candidate.user.profiles.some((profile) => profile.reservedNumberId)
-        );
-
-        if (!isTestCall && !hasActiveReservedNumber) {
+        const outboundCallerId = resolveOutboundCallerId({
+          ownerPhone: candidate.user.phone,
+          destinationPhone: candidate.phone,
+          reservedNumber: candidate.user.profiles[0]?.reservedNumber?.number,
+          numberRentExpiresAt: candidate.user.numberRentExpiresAt,
+          testCallerId: env.TEST_CALLER_ID,
+          now
+        });
+        if (!outboundCallerId) {
           continue;
         }
 
@@ -923,7 +950,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
         });
 
         if (result.count === 1) {
-          return candidate;
+          return { ...candidate, outboundCallerId };
         }
       }
 
@@ -993,6 +1020,20 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     return;
   }
 
+  const outboundCallerId = resolveOutboundCallerId({
+    ownerPhone: profile.user.phone,
+    destinationPhone: claimed.phone,
+    reservedNumber: inboundProfile?.status === ProfileStatus.ACTIVE ? inboundProfile.reservedNumber?.number : null,
+    numberRentExpiresAt: profile.user.numberRentExpiresAt,
+    testCallerId: env.TEST_CALLER_ID,
+    now: new Date()
+  });
+  if (!outboundCallerId) {
+    await releaseOutboundContactWithoutAttempt(prisma, claimed.id);
+    res.json({ ok: true, job: null });
+    return;
+  }
+
   res.json({
     ok: true,
     job: {
@@ -1003,7 +1044,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     },
     profile: mapProfileToVoiceConfig(profile, {
       direction: callMode,
-      outboundCallerId: inboundProfile?.reservedNumber?.number ?? profile.reservedNumber?.number ?? null,
+      outboundCallerId,
       outboundContact: {
         id: claimed.id,
         phone: claimed.phone,

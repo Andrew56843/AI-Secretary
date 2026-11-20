@@ -53,6 +53,7 @@ writeEnv('app.env', {
   GOOGLE_CLIENT_ID: input.googleClientId,
   GOOGLE_CLIENT_SECRET: input.googleClientSecret,
   PHONE_VERIFICATION_CALL_NUMBER: '+79952225212',
+  TEST_CALLER_ID: '+79952225212',
 });
 writeEnv('voice.env', {
   ...integrations,

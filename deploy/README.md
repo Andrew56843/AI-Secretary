@@ -49,6 +49,15 @@ The OAuth client's authorized redirect URI must be:
 https://callsec.ru/api/integrations/google/oauth/callback
 ```
 
+Set `TEST_CALLER_ID=+79952225212` in the private API environment to allow paid
+test calls to an account's own verified phone before it rents a number. An active
+number rented by that account takes priority. The test caller ID is never used
+to call other customers' phones; ordinary outbound calls require the account's
+own active rental. Without either eligible caller ID, the API rejects a test
+request before putting it in the queue. Pass this setting through Compose when
+recreating the API; the host voice service receives the selected caller ID from
+the API, not from its own environment.
+
 The API requests `calendar.events` and `userinfo.email`. Configure
 `OPENAI_PROXY_URL` and `TELEGRAM_PROXY_URL` with the existing authenticated proxy
 URLs. A SOCKS URL is supported for OpenAI; Telegram can use the HTTP proxy URL.
