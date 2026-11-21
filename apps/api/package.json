@@ -22,12 +22,12 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "express": "^5.2.1",
+    "express": "^5.3.0",
     "https-proxy-agent": "^9.1.0",
     "jsonwebtoken": "^9.0.2",
     "prisma": "^6.19.3",
     "socks-proxy-agent": "^10.1.0",
-    "zod": "^4.1.12"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

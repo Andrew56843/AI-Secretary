@@ -23,10 +23,12 @@ PostgreSQL is the source of truth. The voice service must resolve every call thr
 
 ## Local Development
 
-Use Node.js 24 (`.nvmrc`). Install dependencies and start the hot-reload Docker environment:
+Use Node.js 24 (`.nvmrc`) and npm 11.21.3 (`packageManager`). npm must be at
+least 11.18.0 so dependency overrides also apply across workspace links.
+Install dependencies and start the hot-reload Docker environment:
 
 ```bash
-npm ci
+npm exec --yes --package=npm@11.21.3 -- npm ci
 npm run docker:dev:up
 ```
 

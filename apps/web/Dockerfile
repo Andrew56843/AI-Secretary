@@ -1,5 +1,6 @@
 FROM node:24-alpine AS builder
 WORKDIR /app
+RUN npm install --global npm@11.21.3 && npm cache clean --force
 
 ARG VITE_API_URL=
 ENV VITE_API_URL=$VITE_API_URL

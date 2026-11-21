@@ -13,6 +13,15 @@ users or copy balances from the old server.
 - Git checkout owned by the deployment user, for example `/home/andrew/ai`.
 - `/home/andrew/ai/records` created before starting the containers.
 - SIP routing, Asterisk, and the host voice service configured separately.
+- Node.js 24 and npm 11.21.3 for host voice-service dependency installation.
+
+The Docker builders pin npm 11.21.3. Use that version on the host too, or run
+`npm exec --yes --package=npm@11.21.3 -- npm ci`. Older npm releases before
+11.18.0 can silently ignore root overrides across workspace links
+([npm fix](https://github.com/npm/cli/releases/tag/v11.18.0)).
+The scoped `@prisma/config@6.19.3` overrides patch `deepmerge-ts` and `effect`
+without migrating the application to Prisma 7. Keep the Prisma configuration
+regression tests when updating or removing those overrides.
 
 The initial restoration server has about 894 MiB RAM and a 14 GB disk. This
 configuration is intended for that small test deployment: PostgreSQL uses

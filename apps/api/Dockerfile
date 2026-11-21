@@ -1,5 +1,6 @@
 FROM node:24-alpine AS base
 WORKDIR /app
+RUN npm install --global npm@11.21.3 && npm cache clean --force
 
 FROM base AS builder
 ENV DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_secretary?schema=public
