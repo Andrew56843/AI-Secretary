@@ -7,6 +7,7 @@ if [[ $EUID -ne 0 || $# -ne 0 ]]; then
 fi
 
 DEPLOY_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+/usr/local/bin/node "$DEPLOY_DIRECTORY/install-dialplan.cjs" --check
 for DIRECTORY in /usr/local/lib/callsec /etc/asterisk /var/lib/asterisk/agi-bin; do
   if [[ -L "$DIRECTORY" ]]; then
     echo 'Refusing a symbolic-link installation directory' >&2
@@ -47,6 +48,7 @@ if (!/^#include\s+callsec-sip-lines[.]conf\s*$/m.test(text)) {
   fs.renameSync(temporary, file);
 }
 NODE
+/usr/local/bin/node "$DEPLOY_DIRECTORY/install-dialplan.cjs" "$DEPLOY_DIRECTORY/extensions.conf.tpl"
 for NAME in callsec-sip-sync.service callsec-sip-sync.timer; do
   install -o root -g root -m 0644 "$DEPLOY_DIRECTORY/../voice/$NAME" "/etc/systemd/system/$NAME"
 done

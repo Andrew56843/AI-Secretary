@@ -3,7 +3,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const crypto = require('node:crypto');
-const { validateSyncEnvironment, registrationsReady, assertNoLegacyIdentity, applySipConfiguration, runWithSyncLock } = require('./sync-sip-lines.cjs');
+const { validateSyncEnvironment, registrationsReady, assertNoLegacyIdentity, applySipConfiguration, runWithSyncLock, protectedFileLimit } = require('./sync-sip-lines.cjs');
+const { MAX_GENERATED_PJSIP_BYTES, MAX_GENERATED_ROUTES_BYTES, sipLineObjectNames, renderSipLinesConfig } = require('./sip-lines-config.cjs');
 
 const route = {
   endpoint: 'callsec-sip-79952225213', number: '+79952225213', server: 'sip.novofon.ru',
@@ -18,7 +19,11 @@ function fixture(current = { pjsip: 'old protected configuration\n', routes: '{}
   const files = { ...current };
   const io = {
     read: () => ({ ...files }),
-    write(name, text) { events.push(`write:${name}`); files[name] = text; },
+    write(name, text) {
+      events.push(`write:${name}`);
+      files[name] = text;
+      if (name === 'state') files.configHash = JSON.parse(text).configHash;
+    },
     isQuiescent: () => true,
     reload: () => events.push('reload'),
     waitUntilReady: async () => true,
@@ -92,10 +97,48 @@ test('unregistered lines remain unavailable without repeated unnecessary reloads
 });
 
 test('registration checks require every dedicated registration to be Registered', () => {
-  const text = ' callsec-sip-79952225213-registration/sip:sip.novofon.ru:5061 callsec-auth Registered (exp. 42s)\n';
+  const text = ` ${sipLineObjectNames(route).registration}/sip:sip.novofon.ru:5061 callsec-auth Registered (exp. 42s)\n`;
   assert.equal(registrationsReady(text, desired.routes), true);
   assert.equal(registrationsReady(text.replace('Registered', 'Unregistered'), desired.routes), false);
   assert.equal(registrationsReady('', desired.routes), false);
+});
+
+test('password rotation cannot publish a new revision using an older Registered generation', async () => {
+  const line = { ...route, id: 'example-line', username: 'example_account', password: 'old-example-password' };
+  const previous = renderSipLinesConfig([line]);
+  const next = renderSipLinesConfig([{ ...line, password: 'new-example-password', revision: '2026-11-21T12:00:01.000Z' }]);
+  const previousRegistration = sipLineObjectNames(route).registration;
+  const nextRegistration = sipLineObjectNames(next.routes['79952225213']).registration;
+  const oldStatus = ` ${previousRegistration}/sip:sip.novofon.ru:5061 example-auth Registered (exp. 299s)\n`;
+  const { io, files, events } = fixture({ pjsip: previous.pjsip, routes: json(previous.routes), configHash: hash(previous.pjsip) });
+  io.waitUntilReady = async (routes) => registrationsReady(oldStatus, routes);
+  const pending = await applySipConfiguration(next, io);
+  assert.equal(pending.ready, false);
+  assert.equal(files.routes, '{}\n');
+  assert.deepEqual(events, ['write:routes', 'write:pjsip', 'reload', 'write:state']);
+  io.waitUntilReady = async (routes) => registrationsReady(`${oldStatus} ${nextRegistration}/sip:sip.novofon.ru:5061 example-auth Registered (exp. 299s)\n`, routes);
+  assert.equal((await applySipConfiguration(next, io)).ready, true);
+  assert.equal(files.routes, json(next.routes));
+  assert.equal(events.filter((event) => event === 'reload').length, 1);
+  assert.equal(registrationsReady(' callsec-sip-79952225213-registration/sip:sip.novofon.ru:5061 example-auth Registered\n', next.routes), false);
+});
+
+test('oversized generated files are rejected before reading or modifying protected configuration', async () => {
+  for (const output of [
+    { ...desired, pjsip: 'a'.repeat(MAX_GENERATED_PJSIP_BYTES + 1) },
+    { ...desired, routes: { oversized: 'a'.repeat(MAX_GENERATED_ROUTES_BYTES) } },
+  ]) {
+    const { io, events } = fixture();
+    io.read = () => { events.push('read'); throw new Error('must not read'); };
+    await assert.rejects(applySipConfiguration(output, io), /synchronization failed/);
+    assert.deepEqual(events, []);
+  }
+});
+
+test('protected generated PJSIP reads and writes share the expanded size bound', () => {
+  assert.equal(protectedFileLimit('/etc/asterisk/callsec-sip-lines.conf'), MAX_GENERATED_PJSIP_BYTES);
+  assert.ok(protectedFileLimit('/etc/asterisk/callsec-sip-lines.conf') > 2_653_559);
+  assert.equal(protectedFileLimit('/etc/asterisk/callsec-sip-routes.json'), MAX_GENERATED_ROUTES_BYTES);
 });
 
 test('sync refuses a dedicated identity that is still registered by the legacy configuration', () => {

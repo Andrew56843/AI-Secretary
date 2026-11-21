@@ -10,6 +10,14 @@ import { prisma } from "./prisma.js";
 const TELEGRAM_API_URL = "https://api.telegram.org";
 const MAX_TEXT_MESSAGE_LENGTH = 3900;
 const MAX_CAPTION_LENGTH = 900;
+const MAX_RESPONSE_BYTES = 256 * 1024;
+export const TELEGRAM_DELIVERY_STALE_MS = 120_000;
+
+export class TelegramDeliveryError extends Error {
+  constructor(readonly outcome: "FAILED" | "UNKNOWN", message: string) {
+    super(message);
+  }
+}
 
 type TelegramApiResponse = {
   ok?: boolean;
@@ -27,13 +35,8 @@ type TelegramTargetInput = {
 };
 
 function buildTelegramTarget(account: TelegramTargetInput | null | undefined) {
-  if (account?.chatId) {
-    return account.chatId;
-  }
-  if (account?.username) {
-    return account.username.startsWith("@") ? account.username : `@${account.username}`;
-  }
-  return null;
+  const chatId = String(account?.chatId ?? "").trim();
+  return /^-?[1-9]\d{0,19}$/.test(chatId) ? chatId : null;
 }
 
 function normalizePhoneForTelegram(value: string | null | undefined) {
@@ -96,12 +99,20 @@ const telegramProxyAgent = env.TELEGRAM_PROXY_URL ? createTelegramProxyAgent(env
 
 function requestTelegram(method: string, body: Buffer, contentType: string): Promise<TelegramHttpResponse> {
   if (!env.TELEGRAM_BOT_TOKEN) {
-    return Promise.reject(new Error("TELEGRAM_BOT_TOKEN is not configured"));
+    return Promise.reject(new TelegramDeliveryError("FAILED", "Telegram bot is not configured"));
   }
 
   const url = new URL(`${TELEGRAM_API_URL}/bot${env.TELEGRAM_BOT_TOKEN}/${method}`);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      reject(new TelegramDeliveryError("UNKNOWN", "Telegram delivery result is unknown; automatic resend is disabled"));
+    };
     const request = https.request(
       url,
       {
@@ -115,26 +126,46 @@ function requestTelegram(method: string, body: Buffer, contentType: string): Pro
       },
       (response) => {
         const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_RESPONSE_BYTES) {
+            fail();
+            response.destroy();
+          } else chunks.push(chunk);
+        });
+        response.on("aborted", fail);
+        response.on("error", fail);
         response.on("end", () => {
+          if (settled) return;
           const responseText = Buffer.concat(chunks).toString("utf8");
           let payload: TelegramApiResponse = {};
           try {
             payload = responseText ? (JSON.parse(responseText) as TelegramApiResponse) : {};
           } catch {
-            reject(new Error(`Telegram ${method} returned an invalid response`));
+            fail();
             return;
           }
-
+          settled = true;
+          clearTimeout(deadline);
           resolve({ statusCode: response.statusCode ?? 0, payload });
         });
       }
     );
 
-    request.on("timeout", () => request.destroy(new Error(`Telegram ${method} timed out`)));
-    request.on("error", reject);
+    deadline = setTimeout(() => { fail(); request.destroy(); }, 30_000);
+    request.on("timeout", () => { fail(); request.destroy(); });
+    request.on("error", fail);
     request.end(body);
   });
+}
+
+function requireTelegramSuccess({ statusCode, payload }: TelegramHttpResponse) {
+  if (statusCode >= 200 && statusCode < 300 && payload?.ok === true) return;
+  const rejected = payload?.ok === false && statusCode >= 200 && statusCode < 500;
+  throw new TelegramDeliveryError(rejected ? "FAILED" : "UNKNOWN", rejected
+    ? "Telegram rejected the delivery"
+    : "Telegram delivery result is unknown; automatic resend is disabled");
 }
 
 function multipartTextField(boundary: string, name: string, value: string) {
@@ -148,10 +179,7 @@ function multipartTextField(boundary: string, name: string, value: string) {
 
 async function postTelegramJson(method: string, body: Record<string, unknown>) {
   const requestBody = Buffer.from(JSON.stringify(body), "utf8");
-  const { statusCode, payload } = await requestTelegram(method, requestBody, "application/json");
-  if (statusCode < 200 || statusCode >= 300 || !payload.ok) {
-    throw new Error(payload.description ?? `Telegram ${method} failed`);
-  }
+  requireTelegramSuccess(await requestTelegram(method, requestBody, "application/json"));
 }
 
 async function postTelegramDocument(chatId: string, message: string, fileName: string) {
@@ -175,14 +203,11 @@ async function postTelegramDocument(chatId: string, message: string, fileName: s
     Buffer.from(message, "utf8"),
     Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")
   ]);
-  const { statusCode, payload } = await requestTelegram(
+  requireTelegramSuccess(await requestTelegram(
     "sendDocument",
     requestBody,
     `multipart/form-data; boundary=${boundary}`
-  );
-  if (statusCode < 200 || statusCode >= 300 || !payload.ok) {
-    throw new Error(payload.description ?? "Telegram sendDocument failed");
-  }
+  ));
 }
 
 async function sendTelegramTranscript(chatId: string, callLogId: string, message: string) {
@@ -198,73 +223,104 @@ async function sendTelegramTranscript(chatId: string, callLogId: string, message
   await postTelegramDocument(chatId, message, `call-${callLogId}.txt`);
 }
 
-export async function deliverTelegramTranscript(callLogId: string) {
-  const log = await prisma.callLog.findUnique({
-    where: { id: callLogId },
-    include: {
-      transcriptDeliveries: {
-        where: { channel: TranscriptChannel.TELEGRAM },
-        orderBy: { createdAt: "desc" },
-        take: 1
-      },
-      assistantProfile: {
-        select: {
-          user: {
-            select: {
-              telegramAccount: {
-                select: {
-                  status: true,
-                  chatId: true,
-                  username: true
+export async function deliverTelegramTranscript(callLogId: string, send = sendTelegramTranscript) {
+  // Serialize every historical delivery row for this call; never keep the transaction open during HTTP.
+  const claim = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('callsec:telegram-transcript'), hashtext(${callLogId}))`;
+    const log = await tx.callLog.findUnique({
+      where: { id: callLogId },
+      include: {
+        transcriptDeliveries: {
+          where: { channel: TranscriptChannel.TELEGRAM },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+        },
+        assistantProfile: {
+          select: {
+            user: {
+              select: {
+                telegramAccount: {
+                  select: {
+                    status: true,
+                    chatId: true,
+                    username: true
+                  }
                 }
               }
             }
           }
         }
       }
-    }
-  });
-
-  if (!log) {
-    return null;
-  }
-
-  const delivery = log.transcriptDeliveries[0];
-  if (!delivery || delivery.status === TranscriptDeliveryStatus.SENT) {
-    return prisma.callLog.findUnique({
-      where: { id: callLogId },
-      include: { transcriptDeliveries: true }
     });
-  }
-
-  const telegram = log.assistantProfile.user.telegramAccount;
-  const target = buildTelegramTarget(telegram);
-  const message = buildTranscriptMessage(log);
-
-  try {
+    if (!log) return null;
+    const deliveries = log.transcriptDeliveries;
+    const staleAt = new Date(Date.now() - TELEGRAM_DELIVERY_STALE_MS);
+    const stale = deliveries.filter((delivery) => delivery.status === TranscriptDeliveryStatus.SENDING &&
+      (!delivery.claimedAt || delivery.claimedAt <= staleAt));
+    if (stale.length) {
+      await tx.transcriptDelivery.updateMany({
+        where: { id: { in: stale.map((delivery) => delivery.id) }, status: TranscriptDeliveryStatus.SENDING },
+        data: {
+          status: TranscriptDeliveryStatus.UNKNOWN,
+          claimToken: null,
+          payloadPreview: "Interrupted Telegram delivery has an unknown result; automatic resend is disabled"
+        }
+      });
+    }
+    if (deliveries.some((delivery) => delivery.status === TranscriptDeliveryStatus.SENT ||
+        delivery.status === TranscriptDeliveryStatus.SENDING || delivery.status === TranscriptDeliveryStatus.UNKNOWN ||
+        delivery.status === TranscriptDeliveryStatus.FAILED)) return null;
+    const delivery = deliveries.find((row) => row.status === TranscriptDeliveryStatus.PENDING);
+    if (!delivery) return null;
+    const telegram = log.assistantProfile.user.telegramAccount;
+    const target = buildTelegramTarget(telegram);
+    const message = buildTranscriptMessage(log);
+    let failure: string | null = null;
     if (telegram?.status !== "CONNECTED" || !target) {
-      throw new Error("Telegram account is not connected");
+      failure = "Telegram account is not connected to a valid chat";
+    } else if (!log.transcript?.trim()) {
+      failure = "Call transcript is empty";
+    } else if (!env.TELEGRAM_BOT_TOKEN) {
+      failure = "Telegram bot is not configured";
     }
-    if (!log.transcript?.trim()) {
-      throw new Error("Call transcript is empty");
+    if (failure) {
+      await tx.transcriptDelivery.updateMany({
+        where: { id: delivery.id, status: TranscriptDeliveryStatus.PENDING },
+        data: { status: TranscriptDeliveryStatus.FAILED, target, payloadPreview: failure }
+      });
+      return null;
     }
-
-    await sendTelegramTranscript(target, callLogId, message);
-    await prisma.transcriptDelivery.update({
-      where: { id: delivery.id },
+    const claimToken = randomBytes(24).toString("hex");
+    const claimed = await tx.transcriptDelivery.updateMany({
+      where: { id: delivery.id, status: TranscriptDeliveryStatus.PENDING },
       data: {
-        status: TranscriptDeliveryStatus.SENT,
+        status: TranscriptDeliveryStatus.SENDING,
+        claimToken,
+        claimedAt: new Date(),
         target,
         payloadPreview: message.slice(0, 700)
       }
     });
-  } catch (error) {
-    await prisma.transcriptDelivery.update({
-      where: { id: delivery.id },
+    return claimed.count === 1 ? { deliveryId: delivery.id, claimToken, target: target!, message } : null;
+  });
+
+  if (claim) {
+    let status: TranscriptDeliveryStatus = TranscriptDeliveryStatus.SENT;
+    let payloadPreview = claim.message.slice(0, 700);
+    try {
+      await send(claim.target, callLogId, claim.message);
+    } catch (error) {
+      status = error instanceof TelegramDeliveryError && error.outcome === "FAILED"
+        ? TranscriptDeliveryStatus.FAILED : TranscriptDeliveryStatus.UNKNOWN;
+      payloadPreview = status === TranscriptDeliveryStatus.FAILED ? "Telegram rejected the delivery"
+        : "Telegram delivery result is unknown; automatic resend is disabled";
+    }
+    // A persistence error must leave SENDING intact: Telegram may already have accepted the message.
+    await prisma.transcriptDelivery.updateMany({
+      where: { id: claim.deliveryId, claimToken: claim.claimToken, status: TranscriptDeliveryStatus.SENDING },
       data: {
-        status: TranscriptDeliveryStatus.FAILED,
-        target,
-        payloadPreview: String(error instanceof Error ? error.message : error).slice(0, 700)
+        status,
+        claimToken: null,
+        payloadPreview
       }
     });
   }

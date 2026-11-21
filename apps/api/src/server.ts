@@ -3,6 +3,8 @@ import express from "express";
 import { env } from "./config.js";
 import { prisma } from "./lib/prisma.js";
 import { startNumberRentalScheduler } from "./lib/number-rental.js";
+import { deliverTelegramTranscript } from "./lib/telegram.js";
+import { startTelegramDispatcher } from "./lib/telegram-dispatcher.js";
 import { securityHeaders } from "./middleware/security-headers.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
@@ -13,7 +15,7 @@ import { contactNamesRouter } from "./routes/contact-names.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { outboundRouter } from "./routes/outbound.js";
 import { profilesRouter } from "./routes/profiles.js";
-import { voiceInternalRouter } from "./routes/voice-internal.js";
+import { drainVoiceCallDeliveries, voiceInternalRouter } from "./routes/voice-internal.js";
 
 const app = express();
 const allowedOrigins = new Set(
@@ -64,14 +66,33 @@ const server = app.listen(env.PORT, () => {
   console.log(`API listening on http://localhost:${env.PORT}`);
 });
 const stopNumberRentalScheduler = startNumberRentalScheduler();
+const stopTelegramDispatcher = startTelegramDispatcher({ db: prisma, deliver: deliverTelegramTranscript });
+let shuttingDown = false;
 
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const httpClosed = new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
   stopNumberRentalScheduler();
-  server.close(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
+  await Promise.all([stopTelegramDispatcher(), httpClosed]);
+  await drainVoiceCallDeliveries();
+  await prisma.$disconnect();
+  process.exit(0);
+}
+
+function requestShutdown() {
+  void shutdown().catch(async () => {
+    console.error("[SHUTDOWN] Graceful shutdown failed");
+    try {
+      await prisma.$disconnect();
+    } catch {
+      console.error("[SHUTDOWN] Database disconnect failed");
+    }
+    process.exit(1);
   });
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", requestShutdown);
+process.on("SIGTERM", requestShutdown);

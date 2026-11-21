@@ -1,5 +1,9 @@
 'use strict';
 
+const MAX_SIP_LINES = 2000;
+const MAX_GENERATED_PJSIP_BYTES = 8 * 1024 * 1024;
+const MAX_GENERATED_ROUTES_BYTES = 1024 * 1024;
+
 function invalid(field) {
   throw new Error(`Invalid SIP line ${field}`);
 }
@@ -42,13 +46,33 @@ function normalizeLine(input) {
   return { id, endpoint, number, username, password, server, port, transport: 'tls', revision };
 }
 
+function sipLineObjectNames({ endpoint, revision }) {
+  if (!/^callsec-sip-7\d{10}$/.test(endpoint) || typeof revision !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(revision) ||
+      !Number.isFinite(Date.parse(revision)) || new Date(revision).toISOString() !== revision) {
+    invalid('revision identity');
+  }
+  // Asterisk can reuse Registered state when only a referenced auth password changes.
+  const generation = revision.replace(/\D/g, '');
+  return { auth: `${endpoint}-auth-${generation}`, registration: `${endpoint}-registration-${generation}` };
+}
+
+function assertSipConfigurationSize({ pjsip, routes }) {
+  if (typeof pjsip !== 'string' || !routes || typeof routes !== 'object' || Array.isArray(routes) ||
+      Buffer.byteLength(pjsip, 'utf8') > MAX_GENERATED_PJSIP_BYTES ||
+      Buffer.byteLength(`${JSON.stringify(routes, null, 2)}\n`, 'utf8') > MAX_GENERATED_ROUTES_BYTES) {
+    throw new Error('Generated SIP configuration exceeds its protected file limit');
+  }
+}
+
 function renderLine(line) {
   const { endpoint, username, password, server, port, revision } = line;
+  const names = sipLineObjectNames(line);
   const uri = `sip:${server}:${port}\\;transport=tls`;
   const proxy = `${uri}\\;lr`;
   return [
     `; ${endpoint} revision=${revision}`,
-    `[${endpoint}-auth]`,
+    `[${names.auth}]`,
     'type=auth',
     'auth_type=userpass',
     `username=${username}`,
@@ -68,7 +92,7 @@ function renderLine(line) {
     'allow=alaw,ulaw',
     'media_encryption=sdes',
     `aors=${endpoint}-aor`,
-    `outbound_auth=${endpoint}-auth`,
+    `outbound_auth=${names.auth}`,
     `outbound_proxy=${proxy}`,
     `from_user=${username}`,
     `from_domain=${server}`,
@@ -85,10 +109,10 @@ function renderLine(line) {
     'rtp_timeout=60',
     'rtp_timeout_hold=300',
     '',
-    `[${endpoint}-registration]`,
+    `[${names.registration}]`,
     'type=registration',
     'transport=callsec-tls',
-    `outbound_auth=${endpoint}-auth`,
+    `outbound_auth=${names.auth}`,
     `outbound_proxy=${proxy}`,
     `server_uri=${uri}`,
     `client_uri=sip:${username}@${server}`,
@@ -106,6 +130,7 @@ function renderLine(line) {
 
 function renderSipLinesConfig(input) {
   if (!Array.isArray(input)) throw new Error('SIP lines must be an array');
+  if (input.length > MAX_SIP_LINES) throw new Error('Too many SIP lines');
   const lines = input.map(normalizeLine).sort((a, b) => a.endpoint < b.endpoint ? -1 : a.endpoint > b.endpoint ? 1 : 0);
   const ids = new Set();
   const numbers = new Set();
@@ -115,7 +140,8 @@ function renderSipLinesConfig(input) {
 
   for (const line of lines) {
     const identity = `${line.server}\0${line.username}`;
-    const names = [line.endpoint, `${line.endpoint}-auth`, `${line.endpoint}-aor`, `${line.endpoint}-registration`];
+    const versionedNames = sipLineObjectNames(line);
+    const names = [line.endpoint, versionedNames.auth, `${line.endpoint}-aor`, versionedNames.registration];
     if (ids.has(line.id) || numbers.has(line.number) || identities.has(identity) || names.some((name) => sections.has(name))) {
       throw new Error('Duplicate SIP line identity, number or configuration section');
     }
@@ -133,7 +159,12 @@ function renderSipLinesConfig(input) {
     };
   }
 
-  return { pjsip: lines.length ? `${lines.map(renderLine).join('\n\n')}\n` : '', routes };
+  const rendered = { pjsip: lines.length ? `${lines.map(renderLine).join('\n\n')}\n` : '', routes };
+  assertSipConfigurationSize(rendered);
+  return rendered;
 }
 
-module.exports = { renderSipLinesConfig };
+module.exports = {
+  MAX_SIP_LINES, MAX_GENERATED_PJSIP_BYTES, MAX_GENERATED_ROUTES_BYTES,
+  sipLineObjectNames, assertSipConfigurationSize, renderSipLinesConfig,
+};

@@ -87,6 +87,7 @@ model AssistantProfile {
   reservedNumber   ReservedPhoneNumber? @relation(fields: [reservedNumberId], references: [id])
   callLogs         CallLog[]
   activeCalls      ActiveCall[]
+  callBillingSnapshots CallBillingSnapshot[]
   greetingAudioCache GreetingAudioCache?
 
   @@unique([userId, mode])
@@ -125,6 +126,20 @@ model ActiveCall {
 
   @@index([userId, startedAt])
   @@index([outboundContactId])
+}
+
+model CallBillingSnapshot {
+  callUuid             String           @id
+  assistantProfileId   String
+  direction            CallDirection
+  customerPhone        String
+  realtimeModel        String
+  rateKopecksPerMinute Int
+  createdAt            DateTime         @default(now())
+
+  assistantProfile     AssistantProfile @relation(fields: [assistantProfileId], references: [id], onDelete: Cascade)
+
+  @@index([assistantProfileId, createdAt])
 }
 
 model CallLog {
@@ -237,6 +252,8 @@ model TranscriptDelivery {
   status         TranscriptDeliveryStatus @default(PENDING)
   target         String?
   payloadPreview String?
+  claimToken     String?
+  claimedAt      DateTime?
   createdAt      DateTime                 @default(now())
 
   user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -321,6 +338,8 @@ enum TranscriptDeliveryStatus {
   PENDING
   SENT
   FAILED
+  SENDING
+  UNKNOWN
 }
 
 enum PhoneVerificationPurpose {

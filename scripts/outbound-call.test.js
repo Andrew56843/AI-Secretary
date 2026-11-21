@@ -1,9 +1,40 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const { buildOutboundCallFile, getOutboundCallerId } = require('../outbound-call');
+
+test('archived failed calls retain their UUID for idempotent log retries', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const from = source.indexOf('async function scanOutboundDoneFiles()');
+  const to = source.indexOf('async function outboundDialerTick()', from);
+  assert.ok(from > 0 && to > from);
+  const uuid = '12345678123442348234123456789abc';
+  const inFlight = new Map([[uuid, {
+    fileName: 'test.call', job: { id: 'contact-1', phone: '79990000001' },
+    profile: { assistantProfileId: 'profile-1', direction: 'OUTBOUND' }, createdAt: Date.now()
+  }]]);
+  const payloads = [];
+  const scan = vm.runInNewContext(`${source.slice(from, to)}\nscanOutboundDoneFiles`, {
+    outboundInFlight: inFlight, path,
+    CONFIG: { asteriskOutgoingDoneDir: '/test/archived', outboundWaitTimeSec: 45 },
+    sudoFileExists: async () => true,
+    sudoReadTextFile: async () => 'Status: Failed',
+    parseArchivedCallStatus: () => 'Failed',
+    getQueuedCallDirection: () => 'OUTBOUND',
+    sendPlatformCallLog: async (payload) => { payloads.push(payload); },
+    log: () => {}, logErr: () => {},
+  });
+  await scan();
+  await scan();
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].callUuid, uuid);
+  assert.equal(payloads[0].durationSeconds, 0);
+});
 
 const sipRoute = (number) => ({
   endpoint: `callsec-sip-${number}`,

@@ -9,6 +9,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { render } = require('./render-config.cjs');
 const { findDid, postMetadata, selectSipBinding } = require('./callsec-metadata.agi.cjs');
+const { assertMaintenanceReady, installDialplan } = require('./install-dialplan.cjs');
 
 const example = {
   publicIp: '192.0.2.1',
@@ -92,6 +93,59 @@ test('TCP signaling does not enable SRTP or an optimistic fallback', (t) => {
 test('the host explicitly loads the SRTP module', () => {
   const modules = fs.readFileSync(path.join(__dirname, 'modules.conf'), 'utf8');
   assert.match(modules, /^load=res_srtp[.]so$/m);
+});
+
+function dialplanInstallation(overrides = {}) {
+  let current = '[from-ai-forward]\nexten => _X.,1,Dial(PJSIP/novofon-endpoint/sip:${EXTEN}@sip.novofon.ru,45)\n';
+  const operations = [];
+  const io = {
+    isServiceActive: (name) => name === 'asterisk',
+    channels: () => '0 active channels\n0 active calls\n',
+    queuesEmpty: () => true,
+    read: () => current,
+    write: (text) => { current = text; operations.push('write'); },
+    reload: () => operations.push('reload'),
+    ...overrides,
+  };
+  return { io, operations, current: () => current };
+}
+
+test('SIP upgrade installs the dedicated transfer dialplan and reloads only when changed', () => {
+  const desired = fs.readFileSync(path.join(__dirname, 'extensions.conf.tpl'), 'utf8');
+  const installation = dialplanInstallation();
+  assert.deepEqual(installDialplan(desired, installation.io), { changed: true, reloaded: true });
+  assert.equal(installation.current(), desired);
+  assert.deepEqual(installation.operations, ['write', 'reload']);
+  assert.deepEqual(installDialplan(desired, installation.io), { changed: false, reloaded: false });
+  assert.deepEqual(installation.operations, ['write', 'reload']);
+  const script = fs.readFileSync(path.join(__dirname, 'install-sip-sync.sh'), 'utf8');
+  assert.ok(script.indexOf('install-dialplan.cjs" --check') < script.indexOf('install -o root'));
+  assert.match(script, /install-dialplan[.]cjs" "\$DEPLOY_DIRECTORY\/extensions[.]conf[.]tpl"/);
+});
+
+test('dialplan upgrade refuses running voice/sync, active calls and queued call files without writing', () => {
+  for (const service of ['callsec-voice', 'callsec-sip-sync.timer', 'callsec-sip-sync.service']) {
+    const installation = dialplanInstallation({ isServiceActive: (name) => name === service || name === 'asterisk' });
+    assert.throws(() => assertMaintenanceReady(installation.io), /Stop/);
+    assert.deepEqual(installation.operations, []);
+  }
+  for (const overrides of [{ channels: () => '1 active channels\n' }, { queuesEmpty: () => false }]) {
+    const installation = dialplanInstallation(overrides);
+    assert.throws(() => assertMaintenanceReady(installation.io), /active calls and queued/);
+    assert.deepEqual(installation.operations, []);
+  }
+});
+
+test('offline installation never starts Asterisk and failed reload restores the previous dialplan', () => {
+  const desired = fs.readFileSync(path.join(__dirname, 'extensions.conf.tpl'), 'utf8');
+  const offline = dialplanInstallation({ isServiceActive: () => false });
+  assert.deepEqual(installDialplan(desired, offline.io), { changed: true, reloaded: false });
+  assert.deepEqual(offline.operations, ['write']);
+  const failed = dialplanInstallation({ reload: () => { throw new Error('unavailable'); } });
+  const previous = failed.current();
+  assert.throws(() => installDialplan(desired, failed.io), /previous dialplan file restored/);
+  assert.equal(failed.current(), previous);
+  assert.deepEqual(failed.operations, ['write', 'write']);
 });
 
 test('DID identification accepts trunk aliases and rejects unconfigured numbers', () => {

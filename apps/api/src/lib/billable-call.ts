@@ -7,7 +7,8 @@ import {
   TranscriptDeliveryStatus
 } from "@prisma/client";
 import { createBalanceLedgerEntry } from "./balance-ledger.js";
-import { rublesToKopecks } from "./money.js";
+import { loadCallBillingSnapshot } from "./call-billing-snapshot.js";
+import { normalizePhone } from "./phone.js";
 
 type BillableCallInput = {
   callUuid?: string;
@@ -21,28 +22,12 @@ type BillableCallInput = {
   recordingUrl?: string;
 };
 
-const MODEL_RATES_RUB_PER_MINUTE: Record<CallDirection, Record<string, number>> = {
-  [CallDirection.INBOUND]: {
-    "gpt-realtime-mini": 5,
-    "gpt-realtime-2": 10
-  },
-  [CallDirection.OUTBOUND]: {
-    "gpt-realtime-mini": 7,
-    "gpt-realtime-2": 12
-  }
-};
-const DEFAULT_REALTIME_MODEL = "gpt-realtime-2";
-const DEFAULT_RATE_RUB_PER_MINUTE: Record<CallDirection, number> = {
-  [CallDirection.INBOUND]: 10,
-  [CallDirection.OUTBOUND]: 12
-};
-
-function calculateCallChargeKopecks(durationSeconds: number, rateRubPerMinute: number) {
+function calculateCallChargeKopecks(durationSeconds: number, rateKopecksPerMinute: number) {
   if (durationSeconds <= 0) {
     return 0;
   }
 
-  return Math.ceil((durationSeconds * rublesToKopecks(rateRubPerMinute)) / 60);
+  return Math.ceil((durationSeconds * rateKopecksPerMinute) / 60);
 }
 
 export async function createBillableCallLog(tx: Prisma.TransactionClient, input: BillableCallInput) {
@@ -52,7 +37,6 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       id: true,
       userId: true,
       mode: true,
-      realtimeModel: true,
       user: {
         select: {
           id: true,
@@ -81,25 +65,30 @@ export async function createBillableCallLog(tx: Prisma.TransactionClient, input:
       include: { transcriptDeliveries: true }
     });
     if (existing) {
-      if (existing.assistantProfileId !== profile.id || existing.direction !== input.direction) {
+      if (existing.assistantProfileId !== profile.id || existing.direction !== input.direction ||
+          (normalizePhone(existing.customerPhone) || existing.customerPhone.trim()) !==
+            (normalizePhone(input.customerPhone) || input.customerPhone.trim())) {
         throw new Error("CALL_UUID_COLLISION");
       }
       return existing;
     }
   }
 
-  const directionRates = MODEL_RATES_RUB_PER_MINUTE[input.direction];
-  const realtimeModel = directionRates[profile.realtimeModel]
-    ? profile.realtimeModel
-    : DEFAULT_REALTIME_MODEL;
-  const rateRubPerMinute = directionRates[realtimeModel] ?? DEFAULT_RATE_RUB_PER_MINUTE[input.direction];
-  const amountKopecks = calculateCallChargeKopecks(input.durationSeconds, rateRubPerMinute);
+  const snapshot = input.callUuid
+    ? await loadCallBillingSnapshot(tx, { ...input, callUuid: input.callUuid })
+    : null;
+  if (!snapshot && !(input.status === CallStatus.MISSED && input.durationSeconds === 0)) {
+    throw new Error("CALL_BILLING_SNAPSHOT_NOT_FOUND");
+  }
+  const realtimeModel = snapshot?.realtimeModel ?? "not-connected";
+  const rateKopecksPerMinute = snapshot?.rateKopecksPerMinute ?? 0;
+  const amountKopecks = calculateCallChargeKopecks(input.durationSeconds, rateKopecksPerMinute);
 
   await createBalanceLedgerEntry(tx, {
     userId: profile.userId,
     type: BillingTransactionType.CALL_CHARGE,
-    amountKopecks: -amountKopecks,
-    note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateRubPerMinute} RUB/min`,
+    amountKopecks: amountKopecks > 0 ? -amountKopecks : 0,
+    note: `${realtimeModel} - ${input.direction.toLowerCase()} - ${input.customerPhone} - ${input.durationSeconds}s at ${rateKopecksPerMinute / 100} RUB/min`,
     // A call that started with a positive balance must always be logged and billed in full.
     // The negative balance then prevents the next inbound or outbound call at resolution time.
     allowNegativeBalance: true

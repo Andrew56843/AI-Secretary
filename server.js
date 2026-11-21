@@ -247,7 +247,7 @@ function tgFetch(method, params = {}) {
     req.end();
   });
 }
-async function sendTelegram(text, chatId = CONFIG.telegramChatId) {
+async function sendTelegram(text, chatId) {
   if (!CONFIG.telegramBotToken || !chatId) return;
 
   try {
@@ -602,7 +602,14 @@ async function resolvePlatformProfile(meta) {
 
     const response = await platformPostJson('/internal/voice/call/resolve', payload);
 
-    return response?.profile || null;
+    const profile = response?.profile;
+    if (response?.ok !== true || !profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+    const action = String(profile.action || '').toUpperCase();
+    if (action === 'HANGUP') return profile;
+    if ((action && action !== 'OK') || !profile.assistantProfileId ||
+        typeof profile.assistantProfileId !== 'string' ||
+        !['INBOUND', 'OUTBOUND'].includes(profile.direction)) return null;
+    return profile;
   } catch (err) {
     logErr('[PLATFORM]', `resolve failed: ${String(err?.message || err)}`);
     return null;
@@ -1325,7 +1332,7 @@ function baseVoiceConfig() {
   return {
     clientId: 'default',
     clientName: 'Default',
-    forwardPhone: CONFIG.defaultForwardPhone,
+    forwardPhone: '',
     language: CONFIG.defaultLanguage,
     voice: CONFIG.defaultVoice,
     autoGreeting: CONFIG.autoGreeting,
@@ -1351,6 +1358,7 @@ function baseVoiceConfig() {
 }
 
 function resolveClientConfig(meta) {
+  if (meta?.startAuthorized !== true) return null;
   const byPlatform = meta?.platformProfile || null;
   if (!byPlatform) return null;
   const base = baseVoiceConfig();
@@ -1369,7 +1377,7 @@ function resolveClientConfig(meta) {
 
 const callRegistry = new Map();
 
-function putCallMeta(meta) {
+function putCallMeta(meta, startAuthorized = false) {
   const key = normalizeUuid(meta.uuid);
   if (!key) return false;
 
@@ -1388,6 +1396,7 @@ function putCallMeta(meta) {
     accountId: meta.accountId ? String(meta.accountId) : null,
     note: meta.note ? String(meta.note) : null,
     platformProfile: meta.platformProfile || null,
+    startAuthorized: startAuthorized === true,
     raw: meta,
   });
   return true;
@@ -1573,6 +1582,7 @@ async function scanOutboundDoneFiles() {
         direction,
         customerPhone: item.job.phone,
         status: 'MISSED',
+        callUuid: uuid,
         durationSeconds: 0,
         summary: `${direction === 'INBOUND' ? 'Inbound test call' : 'Outbound call'} was not answered or failed before AI conversation. Asterisk status: ${status || 'unknown'}.`,
       });
@@ -1693,6 +1703,57 @@ function startOutboundDialer() {
   scheduleOutboundDialer(1000);
 }
 
+// ---------- Call start authorization ----------
+
+async function authorizeCallStart(body) {
+  const key = normalizeUuid(body?.uuid);
+  if (!/^[a-f0-9]{32}$/.test(key)) return { action: 'HANGUP', meta: null, reason: 'invalid_uuid' };
+  const existing = getCallMeta(key);
+  const mergedBody = { ...(existing?.raw || {}), ...body, uuid: key, platformProfile: null };
+  delete mergedBody.startAuthorized;
+
+  function reject(reason) {
+    putCallMeta({ ...mergedBody, ...(existing?.raw || {}), uuid: key, platformProfile: null });
+    return { action: 'HANGUP', meta: getCallMeta(key), reason };
+  }
+
+  // A queued UUID cannot be rebound to another tenant, phone, line or channel.
+  for (const field of ['did', 'callerId', 'assistantProfileId', 'outboundContactId', 'direction', 'sipEndpoint', 'channel']) {
+    if (!existing?.[field] || !body?.[field]) continue;
+    const normalize = field === 'did' || field === 'callerId'
+      ? normalizeDialPhone
+      : field === 'direction' ? (value) => String(value).toUpperCase() : String;
+    if (normalize(existing[field]) !== normalize(body[field])) return reject('call_identity_changed');
+  }
+
+  putCallMeta(mergedBody);
+  const profile = await resolvePlatformProfile(mergedBody);
+  if (!profile) return reject('profile_unavailable');
+  const action = String(profile.action || '').toUpperCase();
+  if (action !== 'HANGUP') {
+    if ((mergedBody.assistantProfileId && mergedBody.assistantProfileId !== profile.assistantProfileId) ||
+        (mergedBody.direction && String(mergedBody.direction).toUpperCase() !== profile.direction) ||
+        (mergedBody.outboundContactId && mergedBody.outboundContactId !== profile.outboundContact?.id)) {
+      return reject('profile_identity_changed');
+    }
+    if (mergedBody.outboundContactId && (
+      normalizeDialPhone(mergedBody.did) !== normalizeDialPhone(profile.outboundCallerId) ||
+      mergedBody.sipEndpoint !== profile.outboundSipLine?.endpoint
+    )) return reject('sip_route_changed');
+  }
+
+  putCallMeta({
+    ...mergedBody,
+    platformProfile: profile,
+    clientId: profile.clientId || profile.assistantProfileId || null,
+    assistantProfileId: profile.assistantProfileId || null,
+    direction: profile.direction || mergedBody.direction,
+    outboundContactId: profile.outboundContact?.id || null,
+    accountId: profile.account?.id || profile.userId || null,
+  }, true);
+  return { action: action === 'HANGUP' ? 'HANGUP' : 'OK', meta: getCallMeta(key), reason: profile.reason || null };
+}
+
 // ---------- Metadata HTTP server ----------
 
 const metadataServer = http.createServer(async (req, res) => {
@@ -1714,44 +1775,17 @@ const metadataServer = http.createServer(async (req, res) => {
       }
 
       const body = await readJsonBody(req);
-      const existing = getCallMeta(body.uuid);
-      const latestPlatformProfile = await resolvePlatformProfile(body);
-      const platformProfile = latestPlatformProfile || existing?.platformProfile || null;
-      const mergedBody = {
-        ...(existing?.raw || {}),
-        ...body,
-        uuid: body.uuid || existing?.uuid,
-        did: body.did || existing?.did,
-        callerId: body.callerId || existing?.callerId,
-        clientId: body.clientId || existing?.clientId,
-        direction: body.direction || existing?.direction,
-        outboundContactId: body.outboundContactId || existing?.outboundContactId,
-        assistantProfileId: body.assistantProfileId || existing?.assistantProfileId,
-        channel: body.channel || existing?.channel,
-        sipEndpoint: body.sipEndpoint || existing?.sipEndpoint,
-        accountId: body.accountId || existing?.accountId,
-        note: body.note || existing?.note,
-      };
-      if (platformProfile) {
-        mergedBody.platformProfile = platformProfile;
-        mergedBody.clientId = mergedBody.clientId || platformProfile.clientId || platformProfile.assistantProfileId;
-        mergedBody.assistantProfileId = mergedBody.assistantProfileId || platformProfile.assistantProfileId;
-        mergedBody.direction = mergedBody.direction || platformProfile.direction;
-        mergedBody.outboundContactId = mergedBody.outboundContactId || platformProfile.outboundContact?.id;
-      }
-
-      if (!putCallMeta(mergedBody)) {
+      const result = await authorizeCallStart(body);
+      const saved = result.meta;
+      if (!saved) {
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'uuid required' }));
         return;
       }
 
-      const saved = getCallMeta(mergedBody.uuid);
-      const platformAction = String(platformProfile?.action || '').toUpperCase();
-      const startAction = platformAction === 'HANGUP' ? 'HANGUP' : 'OK';
-      log('[META]', `saved uuid=${saved?.uuid || '-'} did=${saved?.did || '-'} callerId=${saved?.callerId || '-'} clientId=${saved?.clientId || '-'} platform=${platformProfile ? 'yes' : 'no'}`);
+      log('[META]', `saved uuid=${saved.uuid} did=${saved.did || '-'} callerId=${saved.callerId || '-'} clientId=${saved.clientId || '-'} action=${result.action} reason=${result.reason || '-'}`);
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end(startAction);
+      res.end(result.action);
       return;
     }
 
@@ -2329,13 +2363,18 @@ const audioServer = net.createServer((socket) => {
       return;
     }
 
+    if (clientCfg?.forwardingEnabled !== true || meta?.platformProfile?.forwardingEnabled !== true) {
+      log('[FWD]', `forwarding disabled (${reason})`);
+      return;
+    }
+
     const ch = meta?.channel;
     if (!ch) {
       logErr('[FWD]', 'no channel in metadata, cannot redirect');
       return;
     }
 
-    const forwardPhone = normalizeForwardPhone(clientCfg.forwardPhone || CONFIG.defaultForwardPhone);
+    const forwardPhone = normalizeForwardPhone(meta.platformProfile.forwardPhone);
     if (!forwardPhone) {
       logErr('[FWD]', 'no forwardPhone configured, cannot redirect');
       return;
@@ -2528,14 +2567,6 @@ const audioServer = net.createServer((socket) => {
     ].filter(Boolean));
   }
 
-  function telegramTargetForCall() {
-    return (
-        clientCfg?.account?.telegram?.chatId ||
-        clientCfg?.account?.telegram?.username ||
-        CONFIG.telegramChatId
-    );
-  }
-
   function normalizePhoneForCallHeader(value) {
     const raw = String(value || '').trim();
     const digits = raw.replace(/\D/g, '');
@@ -2613,16 +2644,15 @@ const audioServer = net.createServer((socket) => {
     }
   }
 
-  async function persistPlatformCallLogOrSendTelegramFallback(transcriptText, status, fallbackSuffix = '') {
+  async function persistFinalCallLog(transcriptText, status) {
     try {
       await persistPlatformCallLog(transcriptText, status);
+      return true;
     } catch (err) {
       const message = String(err?.message || err);
-      logErr('[POSTCALL]', `platform log failed, sending Telegram fallback: ${message}`);
-      const fallbackText = fallbackSuffix
-          ? `${transcriptText}\n\n${fallbackSuffix}`
-          : transcriptText;
-      await sendTelegram(fallbackText, telegramTargetForCall());
+      // The API may already have committed and sent Telegram before its response was lost.
+      logErr('[POSTCALL]', `platform log failed; transcript retained locally, no direct Telegram resend: ${message}`);
+      return false;
     }
   }
 
@@ -2656,7 +2686,7 @@ const audioServer = net.createServer((socket) => {
         fs.writeFileSync(processedTranscriptPath, fallbackText + '\n', 'utf8');
       }
       persistMeta();
-      persistPlatformCallLogOrSendTelegramFallback(fallbackText, redirectRequested ? 'ESCALATED' : 'SUCCESS')
+      persistFinalCallLog(fallbackText, redirectRequested ? 'ESCALATED' : 'SUCCESS')
           .catch((err) => logErr('[POSTCALL]', `fallback post-call handling failed: ${String(err?.message || err)}`));
       return;
     }
@@ -2692,7 +2722,7 @@ const audioServer = net.createServer((socket) => {
       summary.logs.processedError = null;
       summary.logs.processedAt = nowIso();
       persistMeta();
-      await persistPlatformCallLogOrSendTelegramFallback(telegramText, redirectRequested ? 'ESCALATED' : 'SUCCESS');
+      await persistFinalCallLog(telegramText, redirectRequested ? 'ESCALATED' : 'SUCCESS');
     }).catch(async (err) => {
       const message = String(err?.message || err);
       logErr('[POSTCALL]', message);
@@ -2703,10 +2733,9 @@ const audioServer = net.createServer((socket) => {
         fs.writeFileSync(processedTranscriptPath, fallbackText + '\n', 'utf8');
       }
       persistMeta();
-      await persistPlatformCallLogOrSendTelegramFallback(
+      await persistFinalCallLog(
           fallbackText,
-          redirectRequested ? 'ESCALATED' : 'SUCCESS',
-          `[post-call log processing failed: ${message}]`
+          redirectRequested ? 'ESCALATED' : 'SUCCESS'
       );
     });
   }

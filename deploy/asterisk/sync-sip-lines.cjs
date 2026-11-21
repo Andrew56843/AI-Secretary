@@ -7,7 +7,10 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { parseEnv } = require('node:util');
-const { renderSipLinesConfig } = require('./sip-lines-config.cjs');
+const {
+  MAX_SIP_LINES, MAX_GENERATED_PJSIP_BYTES, MAX_GENERATED_ROUTES_BYTES,
+  sipLineObjectNames, assertSipConfigurationSize, renderSipLinesConfig,
+} = require('./sip-lines-config.cjs');
 const { parseSipRoutes, matchingSipRoute } = require('./sip-routing.cjs');
 
 const API_URL = 'http://127.0.0.1:14000/internal/voice/sip-lines/config';
@@ -20,6 +23,9 @@ const FILES = {
   state: '/etc/asterisk/callsec-sip-sync.state.json',
 };
 const OUTGOING_DIRECTORIES = ['/var/spool/asterisk/outgoing', '/var/spool/asterisk/callsec-outgoing-staging'];
+const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
+const protectedFileLimit = (file) => file === FILES.pjsip ? MAX_GENERATED_PJSIP_BYTES :
+  file === FILES.routes ? MAX_GENERATED_ROUTES_BYTES : 2 * 1024 * 1024;
 const hash = (text) => crypto.createHash('sha256').update(text).digest('hex');
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
@@ -73,7 +79,7 @@ function fetchSipLines(config) {
       const chunks = [];
       response.on('data', (chunk) => {
         size += chunk.length;
-        if (size > 2 * 1024 * 1024) request.destroy(syncError('api'));
+        if (size > MAX_API_RESPONSE_BYTES) request.destroy(syncError('api'));
         else chunks.push(chunk);
       });
       response.on('error', () => reject(syncError('api')));
@@ -81,7 +87,7 @@ function fetchSipLines(config) {
         clearTimeout(timer);
         try {
           const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if (response.statusCode !== 200 || data.ok !== true || !Array.isArray(data.lines) || data.lines.length > 2000) {
+          if (response.statusCode !== 200 || data.ok !== true || !Array.isArray(data.lines) || data.lines.length > MAX_SIP_LINES) {
             throw syncError('api');
           }
           resolve(data.lines);
@@ -97,8 +103,10 @@ function fetchSipLines(config) {
 
 function registrationsReady(text, routes) {
   const lines = text.split(/\r?\n/).map((line) => line.trim());
-  return Object.values(routes).every((route) => lines.some((line) =>
-    line.startsWith(`${route.endpoint}-registration/`) && /\sRegistered(?:\s|$)/.test(line)));
+  return Object.values(routes).every((route) => {
+    const registration = sipLineObjectNames(route).registration;
+    return lines.some((line) => line.startsWith(`${registration}/`) && /\sRegistered(?:\s|$)/.test(line));
+  });
 }
 
 function assertNoLegacyIdentity(lines, text, registrationStatus = '') {
@@ -136,6 +144,7 @@ function assertNoLegacyIdentity(lines, text, registrationStatus = '') {
 }
 
 async function applySipConfiguration(rendered, io) {
+  try { assertSipConfigurationSize(rendered); } catch { throw syncError('configuration'); }
   const current = io.read();
   const configHash = hash(rendered.pjsip);
   const desiredRoutes = json(rendered.routes);
@@ -176,13 +185,14 @@ function readProtected(file, optional = false) {
     if (optional && error.code === 'ENOENT') return null;
     throw syncError('filesystem');
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) || stat.size > 2 * 1024 * 1024) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) || stat.size > protectedFileLimit(file)) {
     throw syncError('filesystem');
   }
   return fs.readFileSync(file, 'utf8');
 }
 
 function writeProtected(file, text, groupId) {
+  if (Buffer.byteLength(text, 'utf8') > protectedFileLimit(file)) throw syncError('filesystem');
   const directory = path.dirname(file);
   const stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022)) throw syncError('filesystem');
@@ -268,4 +278,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { validateSyncEnvironment, fetchSipLines, registrationsReady, assertNoLegacyIdentity, applySipConfiguration, runWithSyncLock };
+module.exports = { validateSyncEnvironment, fetchSipLines, registrationsReady, assertNoLegacyIdentity, applySipConfiguration, runWithSyncLock, protectedFileLimit };

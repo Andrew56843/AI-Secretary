@@ -24,6 +24,7 @@ services:
     container_name: ai-secretary-dev-api
     working_dir: /app
     restart: unless-stopped
+    stop_grace_period: 60s
     depends_on:
       db:
         condition: service_healthy

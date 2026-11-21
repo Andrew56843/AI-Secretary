@@ -2,7 +2,10 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { renderSipLinesConfig } = require('./sip-lines-config.cjs');
+const {
+  MAX_SIP_LINES, MAX_GENERATED_PJSIP_BYTES, MAX_GENERATED_ROUTES_BYTES,
+  sipLineObjectNames, assertSipConfigurationSize, renderSipLinesConfig,
+} = require('./sip-lines-config.cjs');
 
 const first = {
   id: 'line-a',
@@ -34,11 +37,12 @@ function section(config, name) {
 test('renders independent SIP identities without shared IP identification or an inbound caller ID override', () => {
   const { pjsip } = renderSipLinesConfig([first, second]);
   for (const line of [first, second]) {
-    const auth = section(pjsip, `${line.endpoint}-auth`);
+    const names = sipLineObjectNames(line);
+    const auth = section(pjsip, names.auth);
     const endpoint = section(pjsip, line.endpoint);
-    const registration = section(pjsip, `${line.endpoint}-registration`);
+    const registration = section(pjsip, names.registration);
     assert.ok(auth.includes(`username=${line.username}\npassword=${line.password}`));
-    assert.ok(endpoint.includes(`outbound_auth=${line.endpoint}-auth`));
+    assert.ok(endpoint.includes(`outbound_auth=${names.auth}`));
     assert.ok(endpoint.includes(`from_user=${line.username}`));
     assert.doesNotMatch(endpoint, /^callerid\s*=/mi);
     assert.match(endpoint, /^transport=callsec-tls$/m);
@@ -47,7 +51,7 @@ test('renders independent SIP identities without shared IP identification or an 
     assert.match(endpoint, /^send_pai=yes$/m);
     assert.match(endpoint, /^send_rpid=yes$/m);
     assert.match(endpoint, /^trust_id_inbound=yes$/m);
-    assert.ok(registration.includes(`outbound_auth=${line.endpoint}-auth`));
+    assert.ok(registration.includes(`outbound_auth=${names.auth}`));
     assert.match(registration, /^line=yes$/m);
     assert.ok(registration.includes(`endpoint=${line.endpoint}`));
   }
@@ -150,4 +154,46 @@ test('requires canonical update revisions and changes both outputs when a line i
   assert.notEqual(after.pjsip, before.pjsip);
   assert.equal(after.routes['79952225212'].revision, revision);
   assert.ok(after.pjsip.includes(`; ${first.endpoint} revision=${revision}`));
+});
+
+test('password rotation replaces authentication and registration identities without changing the DID endpoint', () => {
+  const rotated = { ...first, password: 'rotated-private-password', revision: '2026-11-21T00:00:01.000Z' };
+  const beforeNames = sipLineObjectNames(first);
+  const afterNames = sipLineObjectNames(rotated);
+  const after = renderSipLinesConfig([rotated]);
+  assert.notEqual(afterNames.auth, beforeNames.auth);
+  assert.notEqual(afterNames.registration, beforeNames.registration);
+  assert.match(afterNames.registration, /-20261121000001000$/);
+  assert.doesNotMatch(JSON.stringify(afterNames), /private|password/);
+  assert.ok(!after.pjsip.includes(`[${beforeNames.registration}]`));
+  const registration = section(after.pjsip, afterNames.registration);
+  assert.ok(registration.includes(`outbound_auth=${afterNames.auth}`));
+  assert.ok(registration.includes(`contact_user=${first.username}`));
+  assert.ok(registration.includes(`endpoint=${first.endpoint}`));
+  assert.ok(section(after.pjsip, first.endpoint).includes(`outbound_auth=${afterNames.auth}`));
+  assert.equal(after.routes['79952225212'].endpoint, first.endpoint);
+});
+
+test('all 2000 valid maximum-size lines fit consistent protected output limits', () => {
+  const lines = Array.from({ length: MAX_SIP_LINES }, (_, index) => {
+    const number = String(79950000000 + index);
+    return {
+      ...first, id: `line-${index}`.padEnd(80, 'a'), number: `+${number}`,
+      endpoint: `callsec-sip-${number}`, username: `account_${index}`.padEnd(128, 'a'), password: 'a'.repeat(512),
+    };
+  });
+  const output = renderSipLinesConfig(lines);
+  assert.ok(Buffer.byteLength(JSON.stringify({ ok: true, lines })) <= 2 * 1024 * 1024);
+  assert.equal(Object.keys(output.routes).length, MAX_SIP_LINES);
+  assert.ok(Buffer.byteLength(output.pjsip) > 2 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(output.pjsip) <= MAX_GENERATED_PJSIP_BYTES);
+  assert.ok(Buffer.byteLength(`${JSON.stringify(output.routes, null, 2)}\n`) <= MAX_GENERATED_ROUTES_BYTES);
+  assert.throws(() => renderSipLinesConfig([...lines, first]), /Too many SIP lines/);
+});
+
+test('generated limits use UTF-8 bytes and accept the exact PJSIP boundary', () => {
+  assert.doesNotThrow(() => assertSipConfigurationSize({ pjsip: 'a'.repeat(MAX_GENERATED_PJSIP_BYTES), routes: {} }));
+  assert.throws(() => assertSipConfigurationSize({ pjsip: 'a'.repeat(MAX_GENERATED_PJSIP_BYTES + 1), routes: {} }), /file limit/);
+  assert.throws(() => assertSipConfigurationSize({ pjsip: '\u00e9'.repeat(MAX_GENERATED_PJSIP_BYTES / 2 + 1), routes: {} }), /file limit/);
+  assert.throws(() => assertSipConfigurationSize({ pjsip: '', routes: { oversized: 'a'.repeat(MAX_GENERATED_ROUTES_BYTES) } }), /file limit/);
 });

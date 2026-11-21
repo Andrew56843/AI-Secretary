@@ -46,6 +46,7 @@ import type {
   ProfilesByMode,
   RealtimeModel,
   RealtimeVoice,
+  TranscriptDelivery,
   UiMode
 } from "../types";
 
@@ -459,10 +460,20 @@ function formatDeliveryStatus(status: string) {
   const labels: Record<string, string> = {
     SENT: "отправлено",
     PENDING: "ожидает",
-    FAILED: "ошибка"
+    SENDING: "отправляется",
+    FAILED: "ошибка",
+    UNKNOWN: "не подтверждено"
   };
 
   return labels[status] ?? status.toLowerCase();
+}
+
+function selectTelegramDelivery(deliveries: TranscriptDelivery[] = []) {
+  for (const status of ["SENT", "UNKNOWN", "SENDING", "FAILED", "PENDING"] as const) {
+    const delivery = deliveries.find((item) => item.channel === "TELEGRAM" && item.status === status);
+    if (delivery) return delivery;
+  }
+  return undefined;
 }
 
 function formatRubles(amount: number) {
@@ -1813,7 +1824,7 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
           {logsByMode[activeMode].length === 0 && <p className="empty-state">Логов пока нет.</p>}
 
           {logsByMode[activeMode].map((log) => {
-            const telegramDelivery = log.transcriptDeliveries?.find((delivery) => delivery.channel === "TELEGRAM");
+            const telegramDelivery = selectTelegramDelivery(log.transcriptDeliveries);
             const customerName = contactNames[log.customerPhone];
 
             return (

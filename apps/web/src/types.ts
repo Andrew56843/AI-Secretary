@@ -114,7 +114,7 @@ export type ActiveCall = {
 export type TranscriptDelivery = {
   id: string;
   channel: "TELEGRAM";
-  status: "PENDING" | "SENT" | "FAILED";
+  status: "PENDING" | "SENDING" | "SENT" | "FAILED" | "UNKNOWN";
   createdAt: string;
 };
 

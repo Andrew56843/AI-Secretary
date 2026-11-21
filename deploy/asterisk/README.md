@@ -96,11 +96,21 @@ Provision the encrypted database records first, then create root-only
 Production voice uses its systemd environment, not repository dotenv files.
 
 ```bash
+systemctl stop callsec-voice callsec-sip-sync.timer callsec-sip-sync.service
+# Wait for zero active channels and empty outgoing/staging queues.
 bash deploy/asterisk/install-sip-sync.sh
 systemctl start callsec-sip-sync.service
 systemctl start callsec-sip-sync.timer
 journalctl -u callsec-sip-sync.service --no-pager -n 20
 ```
+
+Run the installer only in a maintenance window with incoming traffic paused and
+the voice service and SIP synchronization units stopped. It refuses active calls
+or queued outgoing/staging files before changing host files. It replaces the
+Callsec-managed `extensions.conf` with the current dedicated-endpoint transfer
+dialplan and reloads the dialplan only if changed and Asterisk is running; it
+never starts or restarts Asterisk. Preserve any custom dialplan contexts in the
+backup before installing. A reload failure restores the previous file.
 
 The installer copies root-executed modules outside the writable checkout to
 `/usr/local/lib/callsec`. The root timer writes protected generated files under
@@ -111,6 +121,14 @@ disabled or rotated routes are revoked while a reload is deferred. A sync
 failure cannot activate a new route, and validation errors retain existing
 configuration. The generated configuration is readable by the trusted local
 `asterisk` group; it is not a separate host-user secret boundary.
+
+Authentication and registration object names include the non-secret update
+revision. Password rotation therefore creates a fresh registration generation;
+an older `Registered` status cannot activate the rotated route. The canonical
+DID endpoint and incoming registration contact user remain unchanged.
+The helper accepts up to 2,000 lines, caps generated PJSIP at 8 MiB and the route
+map at 1 MiB, and checks output byte limits before changing any protected file.
+The same PJSIP bound applies when reading the installed file on the next run.
 
 Reusing the legacy SIP identity requires an explicit controlled transition.
 The timer refuses to load it while `novofon-registration` still uses it in the

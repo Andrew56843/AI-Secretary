@@ -2209,12 +2209,14 @@ label {
   color: var(--brand-strong);
 }
 
-.delivery.pending {
+.delivery.pending,
+.delivery.sending {
   background: #fff7db;
   color: #8a6500;
 }
 
-.delivery.failed {
+.delivery.failed,
+.delivery.unknown {
   background: #fff3f0;
   color: var(--red);
 }

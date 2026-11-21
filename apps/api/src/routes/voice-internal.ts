@@ -4,7 +4,7 @@ import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
-import { createBillableCallLog } from "../lib/billable-call.js";
+import { captureCallBillingSnapshot } from "../lib/call-billing-snapshot.js";
 import {
   calendarActionInputSchema,
   finalizeCalendarTranscriptForCall,
@@ -15,6 +15,7 @@ import {
 } from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
 import { isOwnerTestDestination } from "../lib/outbound-caller-id.js";
+import { claimNextOutboundContact } from "../lib/outbound-queue.js";
 import {
   reservedNumberRouteSelect,
   resolveOutboundSipRoute,
@@ -32,9 +33,29 @@ import { decryptSecret } from "../lib/secret-box.js";
 import { parseSipLineProvisionInput } from "../lib/sip-line-provision-input.js";
 import { deliverTelegramTranscript } from "../lib/telegram.js";
 import { createProfileTranscriptionPrompt } from "../lib/transcription-context.js";
+import { validateVoiceCallBinding } from "../lib/voice-call-binding.js";
+import { persistVoiceCallCallback } from "../lib/voice-call-callback.js";
 
 const voiceInternalRouter = Router();
 const STALE_OUTBOUND_QUEUE_MS = 10 * 60 * 1000;
+const callLogDeliveryTasks = new Set<Promise<unknown>>();
+
+function scheduleCallLogTelegramDelivery(callLogId: string) {
+  const task = Promise.resolve().then(() => deliverTelegramTranscript(callLogId)).catch(() => {
+    console.error("Telegram delivery task failed for call log", callLogId);
+  });
+  callLogDeliveryTasks.add(task);
+  void task.then(
+    () => { callLogDeliveryTasks.delete(task); },
+    () => { callLogDeliveryTasks.delete(task); }
+  );
+}
+
+export async function drainVoiceCallDeliveries() {
+  while (callLogDeliveryTasks.size > 0) {
+    await Promise.allSettled([...callLogDeliveryTasks]);
+  }
+}
 
 const resolveCallSchema = z
   .object({
@@ -51,7 +72,7 @@ const resolveCallSchema = z
 
 const createCallLogSchema = z.object({
   assistantProfileId: z.string().trim().min(1).optional(),
-  callUuid: z.string().trim().max(80).optional(),
+  callUuid: z.string().trim().min(1).max(80),
   did: z.string().trim().min(1).max(64).optional(),
   outboundContactId: z.string().trim().min(1).optional(),
   direction: z.enum(["INBOUND", "OUTBOUND"]).default("INBOUND"),
@@ -813,7 +834,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     parsed.data.outboundContactId
       ? prisma.outboundContact.findFirst({
           where: { id: parsed.data.outboundContactId, userId: profile.userId },
-          select: { id: true, phone: true, attempts: true, queuedForCall: true, callMode: true }
+          select: { id: true, userId: true, phone: true, attempts: true, queuedForCall: true, callMode: true, activeCallUuid: true }
         })
       : null,
     findConfiguredTestSipNumber()
@@ -850,6 +871,20 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
+  const binding = validateVoiceCallBinding({
+    request: parsed.data,
+    profile,
+    ownedNumber: reservedNumber,
+    numberRentExpiresAt: profile.user.numberRentExpiresAt,
+    outboundContact,
+    route,
+    now
+  });
+  if (!binding.ok) {
+    res.status(binding.status).json({ message: binding.message });
+    return;
+  }
+
   if (profile.user.rubleBalanceKopecks <= 0) {
     res.json({
       ok: true,
@@ -873,52 +908,68 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     return;
   }
 
-  warmCalendarSchedulePolicy(profile.prompt);
+  if (!parsed.data.uuid) {
+    res.status(400).json({ message: "Call UUID is required" });
+    return;
+  }
+  const callUuid = parsed.data.uuid;
+  const customerPhone = normalizePhone(parsed.data.callerId ?? "") || parsed.data.callerId || "unknown";
+  let billingSnapshot: Awaited<ReturnType<typeof captureCallBillingSnapshot>>;
+  try {
+    billingSnapshot = await prisma.$transaction(async (tx) => {
+      const snapshot = await captureCallBillingSnapshot(tx, {
+        callUuid,
+        assistantProfileId: profile.id,
+        direction: direction ?? profile.mode,
+        customerPhone,
+        realtimeModel: profile.realtimeModel
+      });
+      if (outboundContact) {
+        const startedContact = await tx.outboundContact.updateMany({
+          where: {
+            id: outboundContact.id,
+            userId: profile.userId,
+            queuedForCall: true,
+            callMode: profile.mode,
+            phone: outboundContact.phone,
+            OR: [{ activeCallUuid: null }, { activeCallUuid: callUuid }]
+          },
+          data: { activeCallUuid: callUuid, activeCallStartedAt: now }
+        });
+        if (startedContact.count !== 1) throw new Error("QUEUED_CALL_UNAVAILABLE");
+      }
+      const activeData = {
+        userId: profile.userId,
+        assistantProfileId: profile.id,
+        outboundContactId: outboundContact?.id ?? null,
+        direction: direction ?? profile.mode,
+        customerPhone,
+        startedAt: now
+      };
+      await tx.activeCall.upsert({
+        where: { callUuid },
+        create: { ...activeData, callUuid },
+        update: activeData
+      });
+      return snapshot;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 10_000 });
+  } catch (error) {
+    if (error instanceof Error && [
+      "CALL_UUID_COLLISION", "INVALID_CALL_BILLING_SNAPSHOT", "UNSUPPORTED_REALTIME_MODEL", "QUEUED_CALL_UNAVAILABLE"
+    ].includes(error.message)) {
+      res.status(409).json({ message: "Call billing authorization does not match the current call" });
+      return;
+    }
+    throw error;
+  }
 
+  warmCalendarSchedulePolicy(profile.prompt);
   const contactName = outboundContact
     ? await prisma.phoneContactName.findUnique({
         where: { userId_phone: { userId: profile.userId, phone: outboundContact.phone } },
         select: { name: true }
       })
     : null;
-
-  if (outboundContact) {
-    await prisma.outboundContact.updateMany({
-      where: {
-        id: outboundContact.id,
-        userId: profile.userId,
-        queuedForCall: true
-      },
-      data: {
-        activeCallUuid: parsed.data.uuid ?? null,
-        activeCallStartedAt: now
-      }
-    });
-  }
-
-  if (parsed.data.uuid) {
-    const customerPhone = normalizePhone(parsed.data.callerId ?? "") || parsed.data.callerId || "unknown";
-    await prisma.activeCall.upsert({
-      where: { callUuid: parsed.data.uuid },
-      create: {
-        userId: profile.userId,
-        assistantProfileId: profile.id,
-        callUuid: parsed.data.uuid,
-        outboundContactId: outboundContact?.id ?? null,
-        direction: direction ?? profile.mode,
-        customerPhone,
-        startedAt: now
-      },
-      update: {
-        userId: profile.userId,
-        assistantProfileId: profile.id,
-        outboundContactId: outboundContact?.id ?? null,
-        direction: direction ?? profile.mode,
-        customerPhone,
-        startedAt: now
-      }
-    });
-  }
 
   res.json({
     ok: true,
@@ -927,7 +978,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
       did: parsed.data.did ?? outboundCallerId ?? reservedNumber?.number ?? null,
       callerId: parsed.data.callerId ?? null
     },
-    profile: mapProfileToVoiceConfig(profile, {
+    profile: mapProfileToVoiceConfig({ ...profile, realtimeModel: billingSnapshot.realtimeModel }, {
       direction,
       outboundCallerId,
       outboundSipLine: route?.sipLine ?? null,
@@ -955,83 +1006,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     async (tx) => {
       await releaseStaleQueuedOutboundContacts(tx, now);
       const testNumber = await findConfiguredTestSipNumber(tx);
-
-      const candidates = await tx.outboundContact.findMany({
-        where: {
-          status: OutboundContactStatus.PENDING,
-          queuedForCall: false,
-          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-          user: {
-            rubleBalanceKopecks: { gt: 0 }
-          },
-          AND: [
-            {
-              OR: [
-                {
-                  callMode: CallDirection.OUTBOUND,
-                  user: { profiles: { some: { mode: CallDirection.OUTBOUND, status: ProfileStatus.ACTIVE } } }
-                },
-                {
-                  callMode: CallDirection.INBOUND,
-                  user: { profiles: { some: { mode: CallDirection.INBOUND, status: ProfileStatus.ACTIVE } } }
-                }
-              ]
-            }
-          ]
-        },
-        include: {
-          user: {
-            select: {
-              phone: true,
-              numberRentExpiresAt: true,
-              profiles: {
-                where: {
-                  mode: CallDirection.INBOUND
-                },
-                select: {
-                  reservedNumber: { select: reservedNumberRouteSelect }
-                }
-              }
-            }
-          }
-        },
-        orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
-        take: 10
-      });
-
-      for (const candidate of candidates) {
-        const route = resolveOutboundSipRoute({
-          ownerPhone: candidate.user.phone,
-          destinationPhone: candidate.phone,
-          reservedNumber: candidate.user.profiles[0]?.reservedNumber,
-          numberRentExpiresAt: candidate.user.numberRentExpiresAt,
-          testCallerId: env.TEST_CALLER_ID,
-          testNumber,
-          now
-        });
-        if (!route) {
-          continue;
-        }
-
-        const result = await tx.outboundContact.updateMany({
-          where: {
-            id: candidate.id,
-            status: OutboundContactStatus.PENDING,
-            queuedForCall: false
-          },
-          data: {
-            queuedForCall: true,
-            activeCallUuid: null,
-            activeCallStartedAt: null
-          }
-        });
-
-        if (result.count === 1) {
-          return candidate;
-        }
-      }
-
-      return null;
+      return claimNextOutboundContact(tx, { now, testCallerId: env.TEST_CALLER_ID, testNumber });
     },
     {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -1207,12 +1182,6 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
   const payload = parsed.data;
   const direction = payload.direction === "OUTBOUND" ? CallDirection.OUTBOUND : CallDirection.INBOUND;
 
-  if (payload.callUuid) {
-    await prisma.activeCall.deleteMany({
-      where: { callUuid: payload.callUuid }
-    });
-  }
-
   const profile = payload.assistantProfileId
     ? await prisma.assistantProfile.findUnique({
         where: { id: payload.assistantProfileId },
@@ -1231,31 +1200,26 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
   const summary = payload.summary || buildDefaultSummary(payload.status, customerPhone);
 
   try {
-    const result = await prisma.$transaction(
-      async (tx) => {
-        const log = await createBillableCallLog(tx, {
-          callUuid: payload.callUuid,
-          assistantProfileId: profile.id,
-          direction,
-          customerPhone,
-          status: payload.status,
-          durationSeconds: payload.durationSeconds,
-          summary,
-          transcript: payload.transcript,
-          recordingUrl: payload.recordingUrl
-        });
-
-        const outbound =
-          payload.outboundContactId
-            ? await finishOutboundContact(tx, payload.outboundContactId, profile.userId, payload.status, log.id)
-            : null;
-
-        return { log, outbound };
+    const result = await persistVoiceCallCallback(
+      prisma,
+      {
+        userId: profile.userId,
+        callUuid: payload.callUuid,
+        assistantProfileId: profile.id,
+        direction,
+        customerPhone,
+        status: payload.status,
+        durationSeconds: payload.durationSeconds,
+        summary,
+        transcript: payload.transcript,
+        recordingUrl: payload.recordingUrl
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      async (tx, callLogId) => payload.outboundContactId
+        ? finishOutboundContact(tx, payload.outboundContactId, profile.userId, payload.status, callLogId)
+        : null
     );
 
-    if (payload.status === CallStatus.SUCCESS) {
+    if (result.created && payload.status === CallStatus.SUCCESS) {
       scheduleCalendarAutomation({
         userId: profile.userId,
         callLogId: result.log.id,
@@ -1268,9 +1232,8 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
       });
     }
 
-    const deliveredLog = await deliverTelegramTranscript(result.log.id);
-
-    res.status(201).json({ ok: true, log: deliveredLog ?? result.log, outbound: result.outbound });
+    scheduleCallLogTelegramDelivery(result.log.id);
+    res.status(201).json({ ok: true, log: result.log, outbound: result.outbound });
   } catch (error) {
     if (error instanceof Error && error.message === "INSUFFICIENT_BALANCE") {
       res.status(402).json({ message: "Not enough balance to save a billable call log" });
@@ -1286,6 +1249,10 @@ voiceInternalRouter.post("/call/logs", requireVoiceService, async (req, res) => 
     }
     if (error instanceof Error && error.message === "CALL_UUID_COLLISION") {
       res.status(409).json({ message: "Call UUID belongs to another profile or direction" });
+      return;
+    }
+    if (error instanceof Error && ["CALL_BILLING_SNAPSHOT_NOT_FOUND", "INVALID_CALL_BILLING_SNAPSHOT"].includes(error.message)) {
+      res.status(409).json({ message: "The authorized billing snapshot for this call is unavailable" });
       return;
     }
     throw error;

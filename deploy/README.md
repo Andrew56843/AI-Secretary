@@ -122,8 +122,9 @@ enabled DID-bound SIP route; deploying only the API will interrupt outbound call
    existing incoming routes unchanged until replacement registrations are verified.
 2. Preserve `DATA_ENCRYPTION_KEY`, back up the database and Asterisk configuration,
    and wait for all active calls and queued Asterisk call files to finish. Stop
-   `callsec-voice` during the schema/import/host transition so it cannot originate
-   a call using an old route.
+   `callsec-voice` and both `callsec-sip-sync` units during the schema/import/host
+   transition, and pause incoming traffic, so no call or synchronization starts
+   while host files are being replaced.
 3. Apply the Prisma migration and import the private SIP bundle into `SipLine`.
    Each entry references an existing `ReservedPhoneNumber`; it does not create a
    SaaS user or change its rental. The password is encrypted with authenticated
@@ -136,8 +137,10 @@ enabled DID-bound SIP route; deploying only the API will interrupt outbound call
    `SIP_CONFIG_API_URL=http://127.0.0.1:14000/internal/voice/sip-lines/config` and the
    same independent `SIP_CONFIG_TOKEN` used by the API. Run
    `bash deploy/asterisk/install-sip-sync.sh` and the synchronization service as
-   described in [the host instructions](asterisk/README.md). The generated secret
-   include and non-secret route map belong under `/etc/asterisk`, outside Git.
+   described in [the host instructions](asterisk/README.md). The installer also
+   replaces the managed transfer dialplan and reloads it, without restarting
+   Asterisk, so transfers cannot retain the old shared endpoint. The generated
+   secret include and non-secret route map belong under `/etc/asterisk`, outside Git.
 5. Reusing the legacy SIP login requires an explicit, quiescent registration
    transition. Do not register the same login through both the legacy and canonical
    registration objects. The sync helper refuses this collision. Preserve the
@@ -154,6 +157,52 @@ DID and revision only, never SIP passwords or provider employee credentials.
 Do not rotate the encryption key to troubleshoot a failed import. Keep the
 database, `/etc/callsec`, Asterisk files and matching source revision together in
 the rollback plan; an old API cannot safely substitute a different caller ID.
+
+### Call Finalization Upgrade
+
+Apply `20261121130000_call_billing_snapshots` and
+`20261121131000_telegram_delivery_claims` before starting the matching API.
+First pause new calls, drain active calls and queued call files, and wait for
+the old voice process to finish transcription, call logs and balance charges.
+Only then stop voice and update the API/voice together. Do not interrupt an
+old in-flight call and try to reconstruct its price from the current profile.
+
+The API saves `CallBillingSnapshot` before admitting a conversation. The selected
+model and integer kopeck rate are immutable for that UUID, including repeated
+start requests. Final billing does not depend on the current profile or the
+short-lived `ActiveCall`. Positive-duration callbacks without an authorized
+snapshot return 409; retain their voice-side recordings and metadata for review,
+not an automatic charge at a guessed rate. Only a zero-duration `MISSED` can be
+recorded without a start snapshot, at zero cost.
+
+Final callbacks require a stable `callUuid`. A per-call transaction lock protects
+the ledger entry, call log and contact attempt update as one operation. Duplicate
+callbacks do not repeat those effects or Calendar post-processing. The HTTP
+response no longer waits for Telegram networking.
+Graceful API shutdown closes HTTP admission and drains tracked delivery jobs
+before disconnecting Prisma. Compose grants 60 seconds for this shutdown.
+
+Only the API sends final transcripts. Its dispatcher recovers persisted `PENDING`
+deliveries on startup and every 30 seconds. A short database transaction claims
+one delivery as `SENDING`; no database connection is held during the HTTP send.
+Confirmed acceptance becomes `SENT`. A rejected delivery becomes `FAILED`;
+timeouts, connection loss, invalid responses and interrupted sends become
+`UNKNOWN`. Neither `FAILED` nor `UNKNOWN` is automatically resent, including when
+historical sibling rows remain pending. Stale `SENDING` is marked `UNKNOWN`, not
+put back in the queue. Review those results before any manual retry because
+Telegram may have accepted a message whose response was lost. Voice keeps local
+transcripts on API failure and never sends a competing Telegram fallback.
+
+The migrations do not delete, merge or rewrite historical delivery records.
+Back up the database and deploy all matching code together; do not roll back
+only the API against rows using the new delivery states.
+
+The optional real-PostgreSQL regression suite requires an explicitly isolated
+localhost database whose name ends in `_test`. Apply migrations there using its
+explicit `DATABASE_URL`, then set `CALLSEC_INTEGRATION_DATABASE_URL` to the same
+URL and run `node --import tsx --test apps/api/src/lib/call-finalization.integration.test.ts`.
+Without that variable, real database tests are skipped. Never point this suite
+at production or at a shared development database.
 
 ### Shared HTTPS Edge
 
