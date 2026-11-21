@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh dedicated Callsec SIP lines
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=30s
+RandomizedDelaySec=2s
+Unit=callsec-sip-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Synchronize dedicated Callsec SIP lines from the private API
+After=network-online.target docker.service asterisk.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/bin/node /usr/local/lib/callsec/sync-sip-lines.cjs
+UMask=0027
+TimeoutStartSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/asterisk
+RuntimeDirectory=callsec-sip-sync
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+UnsetEnvironment=NODE_OPTIONS NODE_PATH CALLSEC_SIP_SYNC_LOCKED
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE

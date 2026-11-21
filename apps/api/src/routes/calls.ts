@@ -1,10 +1,11 @@
-import { CallDirection, OutboundContactStatus, ProfileStatus } from "@prisma/client";
+import { CallDirection, ProfileStatus } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config.js";
-import { resolveOutboundCallerId } from "../lib/outbound-caller-id.js";
+import { reservedNumberRouteSelect, resolveOutboundSipRoute } from "../lib/outbound-sip-route.js";
 import { normalizePhone } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
+import { enqueueTestCall } from "../lib/test-call-queue.js";
 import { requireAuth } from "../middleware/require-auth.js";
 
 const callsRouter = Router();
@@ -50,47 +51,44 @@ callsRouter.post("/site-call", requireAuth, async (req, res) => {
     return;
   }
 
-  const inboundProfile = await prisma.assistantProfile.findUnique({
-    where: { userId_mode: { userId: req.user!.userId, mode: CallDirection.INBOUND } },
-    select: { status: true, reservedNumber: { select: { number: true } } }
-  });
-  const callerId = resolveOutboundCallerId({
+  const [inboundProfile, testNumber] = await Promise.all([
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: req.user!.userId, mode: CallDirection.INBOUND } },
+      select: { reservedNumber: { select: reservedNumberRouteSelect } }
+    }),
+    env.TEST_CALLER_ID
+      ? prisma.reservedPhoneNumber.findUnique({
+          where: { number: normalizePhone(env.TEST_CALLER_ID) },
+          select: reservedNumberRouteSelect
+        })
+      : null
+  ]);
+  const route = resolveOutboundSipRoute({
     ownerPhone: profile.user.phone,
     destinationPhone: phone,
-    reservedNumber: inboundProfile?.status === ProfileStatus.ACTIVE ? inboundProfile.reservedNumber?.number : null,
+    reservedNumber: inboundProfile?.reservedNumber,
     numberRentExpiresAt: profile.user.numberRentExpiresAt,
-    testCallerId: env.TEST_CALLER_ID
+    testCallerId: env.TEST_CALLER_ID,
+    testNumber
   });
-  if (!callerId) {
+  if (!route) {
     res.status(409).json({
       message: "Для тестового звонка пока нет доступного номера. Обратитесь в поддержку или арендуйте номер в разделе пополнения баланса."
     });
     return;
   }
 
-  const contact = await prisma.outboundContact.upsert({
-    where: {
-      userId_phone_callMode: {
-        userId: req.user!.userId,
-        phone,
-        callMode: direction
-      }
-    },
-    update: {
-      status: OutboundContactStatus.PENDING,
-      queuedForCall: false,
-      attempts: 0,
-      nextAttemptAt: null,
-      lastCallLogId: null
-    },
-    create: {
-      userId: req.user!.userId,
-      phone,
-      callMode: direction
-    }
+  const result = await enqueueTestCall(prisma, {
+    userId: req.user!.userId,
+    phone,
+    direction
   });
+  if (!result.queued) {
+    res.status(409).json({ message: result.message });
+    return;
+  }
 
-  res.status(202).json({ queued: true, contact });
+  res.status(202).json(result);
 });
 
 export { callsRouter };

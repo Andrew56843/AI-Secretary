@@ -1,5 +1,5 @@
 // Asterisk AudioSocket voice service entrypoint.
-require('dotenv').config();
+if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 
 const net = require('net');
 const http = require('http');
@@ -25,9 +25,11 @@ const {
 const {
   buildOutboundCallFile,
   getOutboundCallerId,
+  getOutboundSipRoute,
   getQueuedCallDirection,
   normalizeDialPhone,
 } = require('./outbound-call');
+const { SIP_ROUTES_FILE, readSipRoutes, matchingSipRoute } = require('./deploy/asterisk/sip-routing.cjs');
 const { createCallTiming, getCompletedCallSeconds } = require('./call-timing');
 const { createDownsampler24kTo8k } = require('./audio-resampling');
 const { getDueFrameCount, getNextTickDelayMs } = require('./audio-playout');
@@ -53,7 +55,6 @@ const CONFIG = {
   outboundDialerIntervalMs: Number(process.env.OUTBOUND_DIALER_INTERVAL_MS || 5000),
   outboundMaxConcurrent: Number(process.env.OUTBOUND_MAX_CONCURRENT || 1),
   outboundWaitTimeSec: Number(process.env.OUTBOUND_WAIT_TIME_SEC || 45),
-  outboundTrunk: process.env.OUTBOUND_TRUNK || 'PJSIP/novofon-endpoint/sip',
   outboundContext: process.env.OUTBOUND_CONTEXT || 'ai-outbound',
   outboundExtension: process.env.OUTBOUND_EXTENSION || 's',
   asteriskOutgoingDir: DEFAULT_ASTERISK_OUTGOING_DIR,
@@ -61,6 +62,7 @@ const CONFIG = {
       process.env.ASTERISK_OUTGOING_STAGING_DIR ||
       path.join(path.dirname(DEFAULT_ASTERISK_OUTGOING_DIR), 'callsec-outgoing-staging'),
   asteriskOutgoingDoneDir: process.env.ASTERISK_OUTGOING_DONE_DIR || '/var/spool/asterisk/outgoing_done',
+  sipRoutesFile: SIP_ROUTES_FILE,
 
   openAiApiKey: process.env.OPENAI_API_KEY || '',
   openAiProxyUrl: process.env.OPENAI_PROXY_URL || process.env.SOCKS_PROXY_URL || '',
@@ -1382,6 +1384,7 @@ function putCallMeta(meta) {
     outboundContactId: meta.outboundContactId ? String(meta.outboundContactId) : null,
     assistantProfileId: meta.assistantProfileId ? String(meta.assistantProfileId) : null,
     channel: meta.channel ? String(meta.channel) : null,
+    sipEndpoint: meta.sipEndpoint ? String(meta.sipEndpoint) : null,
     accountId: meta.accountId ? String(meta.accountId) : null,
     note: meta.note ? String(meta.note) : null,
     platformProfile: meta.platformProfile || null,
@@ -1604,12 +1607,26 @@ async function outboundDialerTick() {
         continue;
       }
 
+      let installedSipRoutes;
+      try {
+        installedSipRoutes = readSipRoutes(CONFIG.sipRoutesFile);
+      } catch {
+        installedSipRoutes = {};
+      }
+      const sipRoute = getOutboundSipRoute(profile, installedSipRoutes);
+      if (!sipRoute) {
+        logErr('[OUTBOUND]', `dedicated SIP route is not ready for contact=${job.id}`);
+        await releasePlatformOutboundJobWithoutAttempt(job.id, 'dedicated SIP route is not ready');
+        continue;
+      }
+
       const uuid = crypto.randomUUID();
       const normalizedUuid = normalizeUuid(uuid);
       const direction = getQueuedCallDirection(profile);
       const meta = {
         uuid,
         did: outboundCallerId,
+        sipEndpoint: sipRoute.endpoint,
         callerId: phone,
         clientId: profile.clientId || profile.assistantProfileId,
         assistantProfileId: profile.assistantProfileId,
@@ -1627,7 +1644,7 @@ async function outboundDialerTick() {
         phone,
         profile,
         job,
-        outboundTrunk: CONFIG.outboundTrunk,
+        installedSipRoutes,
         outboundContext: CONFIG.outboundContext,
         outboundExtension: CONFIG.outboundExtension,
         outboundWaitTimeSec: CONFIG.outboundWaitTimeSec,
@@ -1711,6 +1728,7 @@ const metadataServer = http.createServer(async (req, res) => {
         outboundContactId: body.outboundContactId || existing?.outboundContactId,
         assistantProfileId: body.assistantProfileId || existing?.assistantProfileId,
         channel: body.channel || existing?.channel,
+        sipEndpoint: body.sipEndpoint || existing?.sipEndpoint,
         accountId: body.accountId || existing?.accountId,
         note: body.note || existing?.note,
       };
@@ -2324,6 +2342,17 @@ const audioServer = net.createServer((socket) => {
     }
     if (forwardPhone.length < 5 || forwardPhone.length > 15) {
       logErr('[FWD]', `invalid forwardPhone length for ${forwardPhone}`);
+      return;
+    }
+
+    let sipRoute = null;
+    try {
+      sipRoute = matchingSipRoute(clientCfg?.outboundSipLine, meta?.did, readSipRoutes(CONFIG.sipRoutesFile));
+    } catch {
+      // A missing or stale host route must never use the shared legacy line.
+    }
+    if (!sipRoute || meta?.sipEndpoint !== sipRoute.endpoint) {
+      logErr('[FWD]', 'dedicated SIP route is not ready, cannot redirect');
       return;
     }
 

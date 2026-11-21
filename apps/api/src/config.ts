@@ -40,6 +40,10 @@ const envSchema = z.object({
   PHONE_VERIFICATION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   TELEGRAM_BOT_TOKEN: optionalString,
   TELEGRAM_PROXY_URL: optionalString,
+  SIP_CONFIG_TOKEN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(32).optional()
+  ),
   VOICE_SERVICE_TOKEN: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(24).optional()
@@ -50,6 +54,11 @@ const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
   console.error("Invalid environment config", parsed.error.flatten().fieldErrors);
+  process.exit(1);
+}
+
+if (parsed.data.SIP_CONFIG_TOKEN && parsed.data.SIP_CONFIG_TOKEN === parsed.data.VOICE_SERVICE_TOKEN) {
+  console.error("SIP_CONFIG_TOKEN must be different from VOICE_SERVICE_TOKEN");
   process.exit(1);
 }
 

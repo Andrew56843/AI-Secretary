@@ -47,7 +47,12 @@ Endpoint, registration and AoR outbound proxies explicitly choose TLS, so the
 voice engine's existing `sip:number@sip.novofon.ru` destination also uses TLS.
 PJSIP reuses an existing connection to the same destination. Keep
 AudioSocket 9019, metadata 9020 and API 14000 bound to loopback. Both DIDs must
-route to this SIP account in Novofon. Incoming requests can use
+route to this SIP account in Novofon. The endpoint's `from_user` is the SIP
+login required by Novofon, not a rented DID. Call files keep the selected
+account's DID in `CALLERID`; Asterisk sends it in P-Asserted-Identity and
+Remote-Party-ID. Novofon's outgoing-number policy must also permit that DID;
+these headers alone do not guarantee which number the provider presents.
+Incoming requests can use
 `did_79952225212` / `did_79952225213`, the bare DID, or a called-number SIP
 header containing the configured DID. Calls to unknown numbers are rejected.
 The DID 79952225212 is also used for registration/recovery confirmation and
@@ -74,6 +79,53 @@ The systemd unit runs the voice process as `andrew`. Its sudo rules allow only
 the existing voice engine's specific Asterisk control and call-file operations.
 Verify the installed policy with `visudo -c`; do not replace it with unrestricted
 passwordless sudo.
+
+## Dedicated Outbound Lines
+
+Each enabled rented DID must use a separate Novofon SIP identity with that DID
+configured as its fixed outgoing number in Novofon. The application never falls
+back to the shared legacy endpoint. Generated endpoint names are bound to their
+DID, for example `callsec-sip-79952225213`. Authentication passwords are exported
+only through the private configuration endpoint; ordinary voice profiles contain
+the safe endpoint and revision, not credentials.
+
+Provision the encrypted database records first, then create root-only
+`/etc/callsec/sip-sync.env` with `SIP_CONFIG_API_URL` set to
+`http://127.0.0.1:14000/internal/voice/sip-lines/config` and a separate
+`SIP_CONFIG_TOKEN` matching the API. Do not put this token in `voice.env`.
+Production voice uses its systemd environment, not repository dotenv files.
+
+```bash
+bash deploy/asterisk/install-sip-sync.sh
+systemctl start callsec-sip-sync.service
+systemctl start callsec-sip-sync.timer
+journalctl -u callsec-sip-sync.service --no-pager -n 20
+```
+
+The installer copies root-executed modules outside the writable checkout to
+`/usr/local/lib/callsec`. The root timer writes protected generated files under
+`/etc/asterisk` and reloads PJSIP only when channels and outgoing/staging queues
+are empty. A kernel lock serializes service and manual helper runs. It does not
+restart Asterisk. New route revisions become usable only after registration;
+disabled or rotated routes are revoked while a reload is deferred. A sync
+failure cannot activate a new route, and validation errors retain existing
+configuration. The generated configuration is readable by the trusted local
+`asterisk` group; it is not a separate host-user secret boundary.
+
+Reusing the legacy SIP identity requires an explicit controlled transition.
+The timer refuses to load it while `novofon-registration` still uses it in the
+base configuration or remains active in Asterisk. During a quiescent deployment,
+back up the configuration, explicitly unregister that legacy registration and
+verify `Unregistered`, then retire only its registration block. Keep the legacy
+endpoint/auth/identify definitions for inbound compatibility. Set
+`legacyRegistrationEnabled: false` in the private restoration JSON so a future
+render does not recreate the duplicate registration. This flag defaults to
+`true` for existing restores; neither the timer nor installer migrates it.
+
+When incoming DIDs move to dedicated registrations, their Novofon incoming
+routes must point to the matching SIP identity. AGI verifies the registered
+endpoint's DID and rejects conflicting destination headers. Test incoming,
+outgoing and transferred calls for each DID after the controlled transition.
 
 ## Checks
 

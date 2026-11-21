@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
+const { readSipRoutes, installedSipRoute } = require('./sip-routing.cjs');
 
 function createLineReader(input) {
   const queue = [];
@@ -32,6 +33,22 @@ function findDid(values, allowedDids) {
     }
   }
   return null;
+}
+
+function selectSipBinding({ channelEndpoint, queuedEndpoint, didValues, legacyDids, routes }) {
+  const allowedDids = [...new Set([...legacyDids, ...Object.keys(routes)])];
+  const declaredDid = findDid(didValues, allowedDids);
+  if (queuedEndpoint && channelEndpoint !== queuedEndpoint) throw new Error('Unexpected outgoing SIP endpoint');
+  if (String(channelEndpoint || '').startsWith('callsec-sip-')) {
+    const endpointDid = channelEndpoint.match(/^callsec-sip-(7\d{10})$/)?.[1];
+    const route = installedSipRoute(endpointDid, routes);
+    if (!route || route.endpoint !== channelEndpoint || (declaredDid && declaredDid !== endpointDid)) {
+      throw new Error('Dedicated SIP endpoint does not match called number');
+    }
+    return { did: endpointDid, route };
+  }
+  if (!declaredDid) throw new Error('Called number is not in the configured DID list');
+  return { did: declaredDid, route: installedSipRoute(declaredDid, routes) };
 }
 
 function postMetadata(config, body) {
@@ -94,17 +111,26 @@ async function runSession(readLine) {
   try {
     const config = JSON.parse(fs.readFileSync('/etc/asterisk/callsec-metadata.json', 'utf8'));
     const variables = {};
-    for (const name of ['AI_UUID', 'AI_DID', 'AI_CALLER', 'AI_DIRECTION', 'AI_OUTBOUND_CONTACT_ID',
-      'AI_ASSISTANT_PROFILE_ID', 'AI_CLIENT_ID', 'PJSIP_HEADER(read,P-Called-Party-ID)', 'PJSIP_HEADER(read,To)']) {
+    for (const name of ['AI_UUID', 'AI_DID', 'AI_CALLER', 'AI_DIRECTION', 'AI_OUTBOUND_CONTACT_ID', 'AI_SIP_ENDPOINT',
+      'AI_ASSISTANT_PROFILE_ID', 'AI_CLIENT_ID', 'CHANNEL(endpoint)', 'PJSIP_HEADER(read,P-Called-Party-ID)', 'PJSIP_HEADER(read,To)']) {
       variables[name] = await getVariable(name);
     }
-    const did = findDid([
-      variables.AI_DID,
-      variables['PJSIP_HEADER(read,P-Called-Party-ID)'],
-      variables['PJSIP_HEADER(read,To)'],
-      environment.agi_extension,
-    ], config.dids);
-    if (!did) throw new Error('Called number is not in the configured DID list');
+    let sipRoutes = {};
+    try {
+      sipRoutes = readSipRoutes();
+    } catch {
+      // Legacy incoming numbers remain available before dedicated lines are installed.
+    }
+    const { did, route: sipRoute } = selectSipBinding({
+      channelEndpoint: variables['CHANNEL(endpoint)'],
+      queuedEndpoint: variables.AI_SIP_ENDPOINT,
+      didValues: [variables.AI_DID, variables['PJSIP_HEADER(read,P-Called-Party-ID)'], variables['PJSIP_HEADER(read,To)'], environment.agi_extension],
+      legacyDids: config.dids,
+      routes: sipRoutes,
+    });
+    if (variables.AI_SIP_ENDPOINT && variables.AI_SIP_ENDPOINT !== sipRoute?.endpoint) {
+      throw new Error('Dedicated SIP endpoint does not match called number');
+    }
     const uuid = variables.AI_UUID || crypto.randomUUID();
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(uuid)) {
       throw new Error('Invalid call UUID');
@@ -112,12 +138,14 @@ async function runSession(readLine) {
     const callerId = String(variables.AI_CALLER || environment.agi_callerid || '').replace(/\D/g, '').slice(0, 20);
     await setVariable('AI_UUID', uuid);
     await setVariable('AI_DID', did);
+    await setVariable('AI_SIP_ENDPOINT', sipRoute?.endpoint || '');
     const action = await postMetadata(config, {
       uuid,
       did,
       callerId,
       direction: variables.AI_DIRECTION === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND',
       channel: environment.agi_channel,
+      sipEndpoint: sipRoute?.endpoint || undefined,
       outboundContactId: variables.AI_OUTBOUND_CONTACT_ID || undefined,
       assistantProfileId: variables.AI_ASSISTANT_PROFILE_ID || undefined,
       clientId: variables.AI_CLIENT_ID || undefined,
@@ -144,4 +172,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { findDid, postMetadata };
+module.exports = { findDid, postMetadata, selectSipBinding };

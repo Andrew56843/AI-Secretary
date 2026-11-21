@@ -41,6 +41,26 @@ model ReservedPhoneNumber {
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
   profiles    AssistantProfile[]
+  sipLine     SipLine?
+}
+
+model SipLine {
+  id                 String              @id @default(cuid())
+  reservedNumberId   String              @unique
+  provider           String              @default("novofon")
+  providerSipLineId  String?             @unique
+  providerEmployeeId String?
+  username           String              @unique
+  passwordEncrypted  String
+  server             String              @default("sip.novofon.ru")
+  port               Int                 @default(5061)
+  transport          String              @default("tls")
+  asteriskEndpoint   String              @unique
+  enabled            Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  reservedNumber     ReservedPhoneNumber @relation(fields: [reservedNumberId], references: [id], onDelete: Cascade)
 }
 
 model AssistantProfile {

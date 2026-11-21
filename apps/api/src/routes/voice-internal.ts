@@ -14,7 +14,13 @@ import {
   type CalendarAutomationResult
 } from "../lib/google-calendar.js";
 import { kopecksToRubles } from "../lib/money.js";
-import { isOwnerTestDestination, resolveOutboundCallerId } from "../lib/outbound-caller-id.js";
+import { isOwnerTestDestination } from "../lib/outbound-caller-id.js";
+import {
+  reservedNumberRouteSelect,
+  resolveOutboundSipRoute,
+  safeSipLineRoute,
+  type OutboundSipLine
+} from "../lib/outbound-sip-route.js";
 import { normalizePhone } from "../lib/phone.js";
 import {
   completeLatestPhoneVerificationForCall,
@@ -22,6 +28,8 @@ import {
   publicPhoneVerificationRequest
 } from "../lib/phone-verification.js";
 import { prisma } from "../lib/prisma.js";
+import { decryptSecret } from "../lib/secret-box.js";
+import { parseSipLineProvisionInput } from "../lib/sip-line-provision-input.js";
 import { deliverTelegramTranscript } from "../lib/telegram.js";
 import { createProfileTranscriptionPrompt } from "../lib/transcription-context.js";
 
@@ -117,6 +125,30 @@ function requireVoiceService(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function requireSipConfigService(req: Request, res: Response, next: NextFunction) {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  if (!env.SIP_CONFIG_TOKEN || env.SIP_CONFIG_TOKEN === env.VOICE_SERVICE_TOKEN) {
+    res.status(503).json({ message: "SIP configuration export is not configured" });
+    return;
+  }
+  const token = getHeaderValue(req, "x-sip-config-token");
+  if (!token || !secureEquals(token, env.SIP_CONFIG_TOKEN)) {
+    res.status(401).json({ message: "Unauthorized SIP configuration request" });
+    return;
+  }
+  next();
+}
+
+async function findConfiguredTestSipNumber(client: Pick<Prisma.TransactionClient, "reservedPhoneNumber"> = prisma) {
+  return env.TEST_CALLER_ID
+    ? client.reservedPhoneNumber.findUnique({
+        where: { number: normalizePhone(env.TEST_CALLER_ID) },
+        select: reservedNumberRouteSelect
+      })
+    : null;
+}
+
 function createNumberLookupValues(input: string | null | undefined) {
   const raw = String(input ?? "").trim();
   const digits = raw.replace(/\D/g, "");
@@ -186,6 +218,7 @@ function mapProfileToVoiceConfig(
       attempts: number;
     };
     outboundCallerId?: string | null;
+    outboundSipLine?: OutboundSipLine | null;
   } = {}
 ) {
   const maxDialogSeconds = Math.max(15, profile.maxDialogSeconds);
@@ -235,6 +268,7 @@ function mapProfileToVoiceConfig(
         }
       : null,
     outboundCallerId: extra.outboundCallerId ?? null,
+    outboundSipLine: extra.outboundSipLine ?? null,
     outboundContact: extra.outboundContact ?? null,
     account: {
       id: profile.user.id,
@@ -345,14 +379,15 @@ async function finishOutboundContact(
 ) {
   const contact = await tx.outboundContact.findFirst({
     where: { id: contactId, userId },
-    select: { id: true, attempts: true }
+    select: { id: true, attempts: true, phone: true, user: { select: { phone: true } } }
   });
 
   if (!contact) {
     return null;
   }
 
-  if (status === CallStatus.SUCCESS || status === CallStatus.ESCALATED) {
+  // A button-triggered owner test is one-shot; campaign contacts keep their retry policy.
+  if (status === CallStatus.SUCCESS || status === CallStatus.ESCALATED || isOwnerTestDestination(contact.user.phone, contact.phone)) {
     await tx.outboundContact.delete({
       where: { id: contact.id }
     });
@@ -624,6 +659,52 @@ voiceInternalRouter.get("/healthz", requireVoiceService, (_req, res) => {
   res.json({ ok: true, service: "voice-internal" });
 });
 
+voiceInternalRouter.get("/sip-lines/config", requireSipConfigService, async (_req, res) => {
+  if (!env.DATA_ENCRYPTION_KEY || env.DATA_ENCRYPTION_KEY.length < 32) {
+    res.status(503).json({ message: "SIP configuration export is unavailable" });
+    return;
+  }
+  try {
+    const lines = await prisma.sipLine.findMany({
+      where: { enabled: true },
+      select: {
+        id: true,
+        username: true,
+        passwordEncrypted: true,
+        enabled: true,
+        asteriskEndpoint: true,
+        server: true,
+        port: true,
+        transport: true,
+        updatedAt: true,
+        reservedNumber: { select: { number: true } }
+      },
+      orderBy: { asteriskEndpoint: "asc" }
+    });
+    const config = lines.map((line) => {
+      const route = safeSipLineRoute(line.reservedNumber.number, line);
+      if (!route || !line.passwordEncrypted.startsWith("enc:v2:")) {
+        throw new Error("Invalid SIP configuration");
+      }
+      const password = decryptSecret(line.passwordEncrypted);
+      if (!password) throw new Error("Invalid SIP credential");
+      parseSipLineProvisionInput({ lines: [{
+        number: route.number,
+        username: line.username,
+        password,
+        asteriskEndpoint: route.endpoint,
+        server: route.server,
+        port: route.port,
+        transport: route.transport
+      }] });
+      return { id: line.id, ...route, username: line.username, password };
+    });
+    res.json({ ok: true, lines: config });
+  } catch {
+    res.status(503).json({ message: "SIP configuration export is unavailable" });
+  }
+});
+
 voiceInternalRouter.post("/calendar/action", requireVoiceService, async (req, res) => {
   const parsed = calendarToolActionSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -724,42 +805,36 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
   }
 
   const now = new Date();
-  const [inboundProfile, outboundContact] = await Promise.all([
-    profile.mode === CallDirection.OUTBOUND
-      ? prisma.assistantProfile.findUnique({
-          where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
-          include: { reservedNumber: true }
-        })
-      : null,
+  const [inboundProfile, outboundContact, testNumber] = await Promise.all([
+    prisma.assistantProfile.findUnique({
+      where: { userId_mode: { userId: profile.userId, mode: CallDirection.INBOUND } },
+      select: { reservedNumber: { select: reservedNumberRouteSelect } }
+    }),
     parsed.data.outboundContactId
       ? prisma.outboundContact.findFirst({
           where: { id: parsed.data.outboundContactId, userId: profile.userId },
           select: { id: true, phone: true, attempts: true, queuedForCall: true, callMode: true }
         })
-      : null
+      : null,
+    findConfiguredTestSipNumber()
   ]);
-  const reservedNumber =
-    profile.mode === CallDirection.INBOUND
-      ? profile.reservedNumber?.number
-      : inboundProfile?.status === ProfileStatus.ACTIVE
-        ? inboundProfile.reservedNumber?.number
-        : null;
+  const reservedNumber = inboundProfile?.reservedNumber;
   const isVerifiedOwnerTest = Boolean(
     outboundContact?.queuedForCall &&
       outboundContact.callMode === profile.mode &&
       isOwnerTestDestination(profile.user.phone, outboundContact.phone) &&
       isOwnerTestDestination(profile.user.phone, parsed.data.callerId ?? "")
   );
-  const outboundCallerId = outboundContact
-    ? resolveOutboundCallerId({
-        ownerPhone: profile.user.phone,
-        destinationPhone: outboundContact.phone,
-        reservedNumber,
-        numberRentExpiresAt: profile.user.numberRentExpiresAt,
-        testCallerId: isVerifiedOwnerTest ? env.TEST_CALLER_ID : undefined,
-        now
-      })
-    : null;
+  const route = resolveOutboundSipRoute({
+    ownerPhone: profile.user.phone,
+    destinationPhone: outboundContact?.phone ?? parsed.data.callerId ?? "",
+    reservedNumber,
+    numberRentExpiresAt: profile.user.numberRentExpiresAt,
+    testCallerId: isVerifiedOwnerTest ? env.TEST_CALLER_ID : undefined,
+    testNumber: isVerifiedOwnerTest ? testNumber : null,
+    now
+  });
+  const outboundCallerId = route?.callerId ?? null;
 
   if (
     profile.user.numberRentExpiresAt &&
@@ -807,7 +882,7 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
       })
     : null;
 
-  if (direction === CallDirection.OUTBOUND && outboundContact) {
+  if (outboundContact) {
     await prisma.outboundContact.updateMany({
       where: {
         id: outboundContact.id,
@@ -849,12 +924,13 @@ voiceInternalRouter.post("/call/resolve", requireVoiceService, async (req, res) 
     ok: true,
     call: {
       uuid: parsed.data.uuid ?? null,
-      did: parsed.data.did ?? outboundCallerId ?? reservedNumber ?? null,
+      did: parsed.data.did ?? outboundCallerId ?? reservedNumber?.number ?? null,
       callerId: parsed.data.callerId ?? null
     },
     profile: mapProfileToVoiceConfig(profile, {
       direction,
-      outboundCallerId: outboundCallerId ?? reservedNumber ?? null,
+      outboundCallerId,
+      outboundSipLine: route?.sipLine ?? null,
       outboundContact: outboundContact
         ? {
             id: outboundContact.id,
@@ -878,6 +954,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
   const claimed = await prisma.$transaction(
     async (tx) => {
       await releaseStaleQueuedOutboundContacts(tx, now);
+      const testNumber = await findConfiguredTestSipNumber(tx);
 
       const candidates = await tx.outboundContact.findMany({
         where: {
@@ -909,11 +986,10 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
               numberRentExpiresAt: true,
               profiles: {
                 where: {
-                  mode: CallDirection.INBOUND,
-                  status: ProfileStatus.ACTIVE
+                  mode: CallDirection.INBOUND
                 },
                 select: {
-                  reservedNumber: { select: { number: true } }
+                  reservedNumber: { select: reservedNumberRouteSelect }
                 }
               }
             }
@@ -924,15 +1000,16 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
       });
 
       for (const candidate of candidates) {
-        const outboundCallerId = resolveOutboundCallerId({
+        const route = resolveOutboundSipRoute({
           ownerPhone: candidate.user.phone,
           destinationPhone: candidate.phone,
-          reservedNumber: candidate.user.profiles[0]?.reservedNumber?.number,
+          reservedNumber: candidate.user.profiles[0]?.reservedNumber,
           numberRentExpiresAt: candidate.user.numberRentExpiresAt,
           testCallerId: env.TEST_CALLER_ID,
+          testNumber,
           now
         });
-        if (!outboundCallerId) {
+        if (!route) {
           continue;
         }
 
@@ -950,7 +1027,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
         });
 
         if (result.count === 1) {
-          return { ...candidate, outboundCallerId };
+          return candidate;
         }
       }
 
@@ -969,7 +1046,7 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
 
   const callMode = claimed.callMode ?? CallDirection.OUTBOUND;
 
-  const [profile, inboundProfile, contactName] = await Promise.all([
+  const [profile, inboundProfile, contactName, testNumber] = await Promise.all([
     prisma.assistantProfile.findUnique({
       where: { userId_mode: { userId: claimed.userId, mode: callMode } },
       include: {
@@ -1003,12 +1080,13 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     }),
     prisma.assistantProfile.findUnique({
       where: { userId_mode: { userId: claimed.userId, mode: CallDirection.INBOUND } },
-      include: { reservedNumber: true }
+      select: { reservedNumber: { select: reservedNumberRouteSelect } }
     }),
     prisma.phoneContactName.findUnique({
       where: { userId_phone: { userId: claimed.userId, phone: claimed.phone } },
       select: { name: true }
-    })
+    }),
+    findConfiguredTestSipNumber()
   ]);
 
   if (!profile || profile.status !== ProfileStatus.ACTIVE) {
@@ -1020,15 +1098,16 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     return;
   }
 
-  const outboundCallerId = resolveOutboundCallerId({
+  const route = resolveOutboundSipRoute({
     ownerPhone: profile.user.phone,
     destinationPhone: claimed.phone,
-    reservedNumber: inboundProfile?.status === ProfileStatus.ACTIVE ? inboundProfile.reservedNumber?.number : null,
+    reservedNumber: inboundProfile?.reservedNumber,
     numberRentExpiresAt: profile.user.numberRentExpiresAt,
     testCallerId: env.TEST_CALLER_ID,
+    testNumber,
     now: new Date()
   });
-  if (!outboundCallerId) {
+  if (!route) {
     await releaseOutboundContactWithoutAttempt(prisma, claimed.id);
     res.json({ ok: true, job: null });
     return;
@@ -1044,7 +1123,8 @@ voiceInternalRouter.post("/outbound/next", requireVoiceService, async (req, res)
     },
     profile: mapProfileToVoiceConfig(profile, {
       direction: callMode,
-      outboundCallerId,
+      outboundCallerId: route.callerId,
+      outboundSipLine: route.sipLine,
       outboundContact: {
         id: claimed.id,
         phone: claimed.phone,

@@ -33,6 +33,9 @@ exten => s,1,AGI(/var/lib/asterisk/agi-bin/callsec-metadata.agi.cjs)
 ; Only the authenticated internal voice service can redirect into this context.
 [from-ai-forward]
 exten => _X.,1,NoOp(Callsec owner transfer)
+ same => n,GotoIf($["${AI_SIP_ENDPOINT}" = ""]?unavailable)
+ same => n,GotoIf($["${AI_SIP_ENDPOINT}" != "callsec-sip-${AI_DID}"]?unavailable)
  same => n,Set(CALLERID(num)=${AI_DID})
- same => n,Dial(PJSIP/novofon-endpoint/sip:${FILTER(0-9,${EXTEN})}@@@SIP_HOST@@,45)
+ same => n,Dial(PJSIP/${FILTER(0-9,${EXTEN})}@${AI_SIP_ENDPOINT},45)
  same => n,Hangup()
+ same => n(unavailable),Hangup()

@@ -23,6 +23,11 @@ const internal = fs.existsSync(internalPath)
   : Object.fromEntries(['postgresPassword', 'jwtSecret', 'dataEncryptionKey', 'voiceServiceToken', 'metadataToken']
     .map((key) => [key, randomBytes(32).toString('hex')]));
 if (!internal.backupKey) internal.backupKey = randomBytes(32).toString('hex');
+if (!internal.sipConfigToken) internal.sipConfigToken = randomBytes(32).toString('hex');
+if (typeof internal.sipConfigToken !== 'string' ||
+    internal.sipConfigToken === internal.voiceServiceToken || internal.sipConfigToken.length < 32) {
+  throw new Error('SIP configuration token must be independent and at least 32 characters.');
+}
 
 function writeJson(name, value) {
   fs.writeFileSync(path.join(outputPath, name), `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
@@ -36,7 +41,7 @@ const integrations = {
   OPENAI_API_KEY: input.openaiApiKey,
   OPENAI_PROXY_URL: `socks5://${proxyAuthority}`,
   TELEGRAM_BOT_TOKEN: input.telegramBotToken,
-  TELEGRAM_PROXY_URL: `socks://${proxyAuthority}`,
+  TELEGRAM_PROXY_URL: `socks5://${proxyAuthority}`,
 };
 writeJson('internal-secrets.json', internal);
 fs.writeFileSync(path.join(outputPath, 'backup.key'), `${internal.backupKey}\n`, { mode: 0o600 });
@@ -48,12 +53,17 @@ writeEnv('app.env', {
   JWT_SECRET: internal.jwtSecret,
   DATA_ENCRYPTION_KEY: internal.dataEncryptionKey,
   VOICE_SERVICE_TOKEN: internal.voiceServiceToken,
+  SIP_CONFIG_TOKEN: internal.sipConfigToken,
   ADMIN_PHONES: input.adminPhone,
   ...integrations,
   GOOGLE_CLIENT_ID: input.googleClientId,
   GOOGLE_CLIENT_SECRET: input.googleClientSecret,
   PHONE_VERIFICATION_CALL_NUMBER: '+79952225212',
   TEST_CALLER_ID: '+79952225212',
+});
+writeEnv('sip-sync.env', {
+  SIP_CONFIG_API_URL: 'http://127.0.0.1:14000/internal/voice/sip-lines/config',
+  SIP_CONFIG_TOKEN: internal.sipConfigToken,
 });
 writeEnv('voice.env', {
   ...integrations,
@@ -67,7 +77,6 @@ writeEnv('voice.env', {
   RECORDS_DIR: '/home/andrew/ai/records',
   OUTBOUND_DIALER_ENABLED: true,
   OUTBOUND_MAX_CONCURRENT: 1,
-  OUTBOUND_TRUNK: 'PJSIP/novofon-endpoint/sip',
   OUTBOUND_CONTEXT: 'ai-outbound',
   FORWARD_CONTEXT: 'from-ai-forward',
   TELEGRAM_LINK_POLLING_ENABLED: true,
@@ -79,6 +88,7 @@ writeJson('asterisk-secrets.json', {
   sipPort: input.sipPort,
   sipTransport: input.sipTransport || 'tls',
   sipBindPort: input.sipBindPort || 5071,
+  legacyRegistrationEnabled: input.legacyRegistrationEnabled !== false,
   publicIp: input.host,
   metadataToken: internal.metadataToken,
   dids: ['79952225212', '79952225213'],

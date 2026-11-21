@@ -27,16 +27,20 @@ machine is not sized for multiple concurrent customer calls.
 
 ## Environment
 
-Copy `deploy/.env.restore.example` to the repository-root `.env`, fill the
-credentials privately on the server, and set its permissions to `600`.
-The root `.env` is ignored by Git. Do not put production credentials in the
-example file or pass it around as a troubleshooting attachment.
+Copy `deploy/.env.restore.example` to `/etc/callsec/app.env`, fill the
+credentials privately on the server, and keep it owned by root with mode `600`.
+Pass `--env-file /etc/callsec/app.env` explicitly to Docker Compose. Do not put
+the SIP configuration token in the checkout's `.env` or any voice-readable
+file. Do not commit filled environment files or troubleshooting attachments.
 
 Generate separate random values of at least 32 bytes for `POSTGRES_PASSWORD`,
-`JWT_SECRET`, `DATA_ENCRYPTION_KEY`, and `VOICE_SERVICE_TOKEN`, for example with
+`JWT_SECRET`, `DATA_ENCRYPTION_KEY`, `VOICE_SERVICE_TOKEN`, and `SIP_CONFIG_TOKEN`, for example with
 `openssl rand -hex 32`. Use a hex password so it is also valid in the PostgreSQL
 connection URL. Keep `DATA_ENCRYPTION_KEY` unchanged across deployments because
-Google OAuth tokens in the database are encrypted with it.
+Google OAuth tokens and SIP passwords in the database are encrypted with it.
+`SIP_CONFIG_TOKEN` must differ from `VOICE_SERVICE_TOKEN`. Only the API and the
+root-owned SIP synchronization service receive the former; the voice process
+only receives safe routing metadata.
 
 Set `SOURCE_COMMIT` to the full output of `git rev-parse HEAD`. Both application
 images and containers receive that revision as an OCI label; the API also
@@ -69,11 +73,11 @@ Run from the Git checkout:
 ```sh
 mkdir -p /home/andrew/ai/records
 docker network inspect callsec-edge >/dev/null 2>&1 || docker network create callsec-edge
-docker compose -f docker-compose.restore.yml config --quiet
-docker compose -f docker-compose.restore.yml build api
-docker compose -f docker-compose.restore.yml build web
-docker compose -f docker-compose.restore.yml up -d --no-build
-docker compose -f docker-compose.restore.yml ps
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml config --quiet
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml build api
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml build web
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml up -d --no-build
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml ps
 curl --fail http://127.0.0.1:14000/healthz
 curl --fail https://callsec.ru/healthz
 ```
@@ -101,12 +105,55 @@ Telegram notification after each call.
 
 ## Updates And Backups
 
-Pull the intended commit, update `SOURCE_COMMIT` in the private `.env`, then
+Pull the intended commit, update `SOURCE_COMMIT` in `/etc/callsec/app.env`, then
 build `api` and `web` sequentially as above and run
-`docker compose -f docker-compose.restore.yml up -d --no-build`. Update and
+`docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml up -d --no-build`. Update and
 restart the host voice service from the same checkout after active calls end.
 Check the image/container revision labels and health endpoints after each
 deployment.
+
+### Dedicated SIP Line Rollout
+
+Deploy the dedicated-line changes as one coordinated maintenance operation.
+The new API and voice code deliberately reject outbound calls without a valid,
+enabled DID-bound SIP route; deploying only the API will interrupt outbound calls.
+
+1. In Novofon, set each SIP line to the fixed outgoing DID it serves. Keep the
+   existing incoming routes unchanged until replacement registrations are verified.
+2. Preserve `DATA_ENCRYPTION_KEY`, back up the database and Asterisk configuration,
+   and wait for all active calls and queued Asterisk call files to finish. Stop
+   `callsec-voice` during the schema/import/host transition so it cannot originate
+   a call using an old route.
+3. Apply the Prisma migration and import the private SIP bundle into `SipLine`.
+   Each entry references an existing `ReservedPhoneNumber`; it does not create a
+   SaaS user or change its rental. The password is encrypted with authenticated
+   `enc:v2` encryption. The CLI accepts JSON on stdin only and prints no credentials.
+   In the built API container the command is `node dist/scripts/provision-sip-lines.js`.
+   Pipe a root-readable bundle into `docker compose ... exec -T api` rather than
+   putting passwords in command arguments or source files. An encrypted envelope
+   `{ "encrypted": "enc:v2:..." }` is supported with the same data encryption key.
+4. Install `/etc/callsec/sip-sync.env` as root:root `0600`, with
+   `SIP_CONFIG_API_URL=http://127.0.0.1:14000/internal/voice/sip-lines/config` and the
+   same independent `SIP_CONFIG_TOKEN` used by the API. Run
+   `bash deploy/asterisk/install-sip-sync.sh` and the synchronization service as
+   described in [the host instructions](asterisk/README.md). The generated secret
+   include and non-secret route map belong under `/etc/asterisk`, outside Git.
+5. Reusing the legacy SIP login requires an explicit, quiescent registration
+   transition. Do not register the same login through both the legacy and canonical
+   registration objects. The sync helper refuses this collision. Preserve the
+   legacy inbound endpoint/identify configuration while disabling only its old
+   registration, then verify the new registration before resuming traffic.
+6. Confirm both dedicated registrations are `Registered`, route-map revisions
+   match the API, and caller IDs match their DIDs. Start the matching voice code,
+   verify incoming, rented-number outgoing and owner-only test calls, then enable
+   the synchronization timer. Check one billing entry and one Telegram result.
+
+The private configuration endpoint is loopback-only and must never be exposed
+through Caddy. Ordinary profile responses and call metadata contain endpoint,
+DID and revision only, never SIP passwords or provider employee credentials.
+Do not rotate the encryption key to troubleshoot a failed import. Keep the
+database, `/etc/callsec`, Asterisk files and matching source revision together in
+the rollback plan; an old API cannot safely substitute a different caller ID.
 
 ### Shared HTTPS Edge
 

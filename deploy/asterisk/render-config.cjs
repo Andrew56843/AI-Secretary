@@ -14,6 +14,9 @@ function configurationValue(value, name) {
 }
 
 function render(config, outputDirectory) {
+  if (config.legacyRegistrationEnabled !== undefined && typeof config.legacyRegistrationEnabled !== 'boolean') {
+    throw new Error('legacyRegistrationEnabled must be boolean');
+  }
   if (net.isIP(config.publicIp) !== 4) throw new Error('publicIp must be an IPv4 address');
   const sipHost = configurationValue(config.sipHost || 'sip.novofon.ru', 'sipHost');
   if (!/^[a-z0-9.-]+$/i.test(sipHost)) throw new Error('Invalid sipHost');
@@ -54,13 +57,18 @@ function render(config, outputDirectory) {
       'symmetric_transport=yes',
     ].join('\n') : '',
   };
-  fs.mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
-  for (const fileName of ['pjsip.conf', 'extensions.conf']) {
-    const template = fs.readFileSync(path.join(__dirname, `${fileName}.tpl`), 'utf8');
-    const rendered = template.replace(/@@([A-Z_]+)@@/g, (_match, key) => {
+  function renderTemplate(template) {
+    return template.replace(/@@([A-Z_]+)@@/g, (_match, key) => {
       if (!Object.hasOwn(replacements, key)) throw new Error(`Unknown template field ${key}`);
       return replacements[key];
     });
+  }
+  replacements.LEGACY_REGISTRATION = config.legacyRegistrationEnabled === false ? ''
+    : renderTemplate(fs.readFileSync(path.join(__dirname, 'legacy-registration.conf.tpl'), 'utf8')).trimEnd();
+  fs.mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
+  for (const fileName of ['pjsip.conf', 'extensions.conf']) {
+    const template = fs.readFileSync(path.join(__dirname, `${fileName}.tpl`), 'utf8');
+    const rendered = renderTemplate(template);
     fs.writeFileSync(path.join(outputDirectory, fileName), rendered, { mode: 0o600 });
   }
   fs.writeFileSync(path.join(outputDirectory, 'callsec-metadata.json'), `${JSON.stringify({

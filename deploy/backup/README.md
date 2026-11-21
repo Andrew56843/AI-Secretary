@@ -13,8 +13,13 @@ The archive contains:
 - `database.dump`, its SHA-256 checksum, and the deployed Git revision.
 - `/etc/callsec`, except the separate backup encryption key.
 - `/etc/asterisk`.
-- `/opt/callsec/.env`, the production Compose file, and Caddy configuration.
-- The voice and backup systemd units when present.
+- The production Compose file and Caddy configuration.
+- The voice, SIP synchronization, and backup systemd units when present.
+
+The production environment is `/etc/callsec/app.env`, included with the private
+configuration directory. Do not copy it into the Git checkout or `voice.env`:
+it contains the SIP configuration export token, which the voice process does
+not need.
 
 Call recordings are intentionally excluded. Copy `/home/andrew/ai/records`
 separately to preserve the audio archive. The database stores call metadata,
@@ -73,23 +78,23 @@ the stored Google OAuth tokens cannot be decrypted. Keep the backup key private
 and outside the Git checkout.
 
 To restore the database, stop the API and voice service so they cannot modify
-it while restoring. On a fresh server, install the recovered `.env` with mode
-600 at `/opt/callsec/.env`, then start PostgreSQL only. The following command
-replaces matching database objects and must target the intended restore
-database:
+it while restoring. On a fresh server, install the recovered `app.env` owned by
+root with mode 600 at `/etc/callsec/app.env`, then start PostgreSQL only. The
+following command replaces matching database objects and must target the
+intended restore database:
 
 ```sh
 cd /opt/callsec
-docker compose -f docker-compose.restore.yml up -d db
-docker compose -f docker-compose.restore.yml exec -T db \
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml up -d db
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml exec -T db \
   pg_restore --username callsec --dbname ai_secretary \
     --clean --if-exists --no-owner --no-acl --exit-on-error \
   < "$restore_dir/database.dump"
-docker compose -f docker-compose.restore.yml up -d --no-build
+docker compose --env-file /etc/callsec/app.env -f docker-compose.restore.yml up -d --no-build
 ```
 
 Wait until PostgreSQL is healthy before running `pg_restore`. Start the host
 voice service after checking the API health endpoint. Verify user access,
 balances, profiles, and integrations; restore recordings separately if needed.
 After verification, remove the extracted plaintext from the private temporary
-directory. Do not leave decrypted `.env` files in shared folders.
+directory. Do not leave decrypted environment files in shared folders.

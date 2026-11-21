@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 project_dir=/opt/callsec
+app_env=/etc/callsec/app.env
 backup_dir=/var/backups/callsec
 key_file=/etc/callsec/backup.key
 work_dir=
@@ -32,7 +33,7 @@ if [[ $(stat -c '%s' "$key_file") -lt 32 ]]; then
   exit 1
 fi
 
-for required_path in "$project_dir/.env" "$project_dir/docker-compose.restore.yml" /etc/callsec /etc/asterisk; do
+for required_path in "$app_env" "$project_dir/docker-compose.restore.yml" /etc/callsec /etc/asterisk; do
   if [[ ! -e $required_path ]]; then
     printf 'Required backup source is missing: %s\n' "$required_path" >&2
     exit 1
@@ -52,7 +53,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-docker compose --project-directory "$project_dir" --env-file "$project_dir/.env" \
+docker compose --project-directory "$project_dir" --env-file "$app_env" \
   -f "$project_dir/docker-compose.restore.yml" exec -T db \
   pg_dump --username callsec --dbname ai_secretary --format custom --no-owner --no-acl \
   > "$work_dir/database.dump"
@@ -68,12 +69,13 @@ printf 'created_utc=%s\nsource_commit=%s\ndatabase=ai_secretary\n' \
 archive_paths=(
   etc/callsec
   etc/asterisk
-  opt/callsec/.env
   opt/callsec/docker-compose.restore.yml
   opt/callsec/deploy/Caddyfile
 )
 for optional_path in \
   etc/systemd/system/callsec-voice.service \
+  etc/systemd/system/callsec-sip-sync.service \
+  etc/systemd/system/callsec-sip-sync.timer \
   etc/systemd/system/callsec-backup.service \
   etc/systemd/system/callsec-backup.timer; do
   if [[ -e /$optional_path ]]; then

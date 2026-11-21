@@ -3,6 +3,8 @@ type=global
 user_agent=Callsec
 endpoint_identifier_order=ip,username,anonymous
 
+#include callsec-sip-lines.conf
+
 [callsec-@@SIP_TRANSPORT@@]
 type=transport
 protocol=@@SIP_TRANSPORT@@
@@ -35,6 +37,7 @@ aors=novofon-aor
 outbound_auth=novofon-auth
 outbound_proxy=@@SIP_OUTBOUND_PROXY@@
 from_domain=@@SIP_HOST@@
+from_user=@@SIP_USERNAME@@
 direct_media=no
 rtp_symmetric=yes
 force_rport=yes
@@ -54,20 +57,4 @@ endpoint=novofon-endpoint
 match=@@SIP_HOST@@
 srv_lookups=yes
 
-[novofon-registration]
-type=registration
-transport=callsec-@@SIP_TRANSPORT@@
-outbound_auth=novofon-auth
-outbound_proxy=@@SIP_OUTBOUND_PROXY@@
-server_uri=@@SIP_SERVER_URI@@
-client_uri=sip:@@SIP_USERNAME@@@@@SIP_HOST@@
-contact_user=@@SIP_USERNAME@@
-expiration=300
-retry_interval=60
-forbidden_retry_interval=300
-fatal_retry_interval=300
-auth_rejection_permanent=no
-; Asterisk treats zero as no retries, not unlimited retries.
-max_retries=1000000
-line=yes
-endpoint=novofon-endpoint
+@@LEGACY_REGISTRATION@@

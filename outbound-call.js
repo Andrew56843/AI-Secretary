@@ -1,5 +1,7 @@
 'use strict';
 
+const { matchingSipRoute } = require('./deploy/asterisk/sip-routing.cjs');
+
 function callFileValue(value) {
   return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 }
@@ -16,12 +18,16 @@ function getOutboundCallerId(profile) {
   return normalizeDialPhone(profile?.outboundCallerId || profile?.reservedNumber?.number || '');
 }
 
+function getOutboundSipRoute(profile, installedSipRoutes) {
+  return matchingSipRoute(profile?.outboundSipLine, getOutboundCallerId(profile), installedSipRoutes);
+}
+
 function buildOutboundCallFile({
   uuid,
   phone,
   profile,
   job,
-  outboundTrunk,
+  installedSipRoutes,
   outboundContext,
   outboundExtension,
   outboundWaitTimeSec,
@@ -30,9 +36,11 @@ function buildOutboundCallFile({
   const callerId = getOutboundCallerId(profile);
   if (!normalizedPhone) throw new Error('Outbound destination phone is required');
   if (!callerId) throw new Error('Client reserved number is required for outbound calls');
+  const sipRoute = getOutboundSipRoute(profile, installedSipRoutes);
+  if (!sipRoute) throw new Error('Dedicated SIP route is not ready for this caller ID');
 
   const direction = getQueuedCallDirection(profile);
-  const channel = `${outboundTrunk}:${normalizedPhone}@sip.novofon.ru`;
+  const channel = `PJSIP/${normalizedPhone}@${sipRoute.endpoint}`;
   const callerIdLine = `"${callFileValue(profile.clientName || 'AI Secretary')}" <${callerId}>`;
 
   return [
@@ -47,6 +55,7 @@ function buildOutboundCallFile({
     'Archive: yes',
     `Setvar: AI_UUID=${uuid}`,
     `Setvar: AI_DID=${callerId}`,
+    `Setvar: AI_SIP_ENDPOINT=${sipRoute.endpoint}`,
     `Setvar: AI_CALLER=${normalizedPhone}`,
     `Setvar: AI_DIRECTION=${direction}`,
     `Setvar: AI_OUTBOUND_CONTACT_ID=${callFileValue(job.id)}`,
@@ -59,6 +68,7 @@ function buildOutboundCallFile({
 module.exports = {
   buildOutboundCallFile,
   getOutboundCallerId,
+  getOutboundSipRoute,
   getQueuedCallDirection,
   normalizeDialPhone,
 };

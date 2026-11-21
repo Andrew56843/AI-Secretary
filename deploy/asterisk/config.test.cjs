@@ -8,7 +8,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { render } = require('./render-config.cjs');
-const { findDid, postMetadata } = require('./callsec-metadata.agi.cjs');
+const { findDid, postMetadata, selectSipBinding } = require('./callsec-metadata.agi.cjs');
 
 const example = {
   publicIp: '192.0.2.1',
@@ -25,6 +25,10 @@ test('templates preserve the SIP URI separator and produce matching metadata', (
   const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
   const dialplan = fs.readFileSync(path.join(directory, 'extensions.conf'), 'utf8');
   assert.match(pjsip, /client_uri=sip:example_account@sip[.]novofon[.]ru/);
+  assert.match(pjsip, /^from_user=example_account$/m);
+  assert.match(pjsip, /^send_pai=yes$/m);
+  assert.match(pjsip, /^send_rpid=yes$/m);
+  assert.doesNotMatch(pjsip, /^callerid\s*=/im);
   assert.match(pjsip, /protocol=tls\nbind=0[.]0[.]0[.]0:5071/);
   assert.match(pjsip, /server_uri=sip:sip[.]novofon[.]ru:5061\\;transport=tls/);
   assert.equal((pjsip.match(/outbound_proxy=sip:sip[.]novofon[.]ru:5061\\;transport=tls\\;lr/g) || []).length, 3);
@@ -32,7 +36,10 @@ test('templates preserve the SIP URI separator and produce matching metadata', (
   assert.match(pjsip, /allow_wildcard_certs=yes/);
   assert.match(pjsip, /allow=alaw,ulaw\nmedia_encryption=sdes\n/);
   assert.doesNotMatch(pjsip, /media_encryption_optimistic\s*=\s*yes/);
-  assert.match(dialplan, /\}@sip[.]novofon[.]ru,45/);
+  assert.match(dialplan, /Dial\(PJSIP\/\$\{FILTER\(0-9,\$\{EXTEN\}\)\}@\$\{AI_SIP_ENDPOINT\},45\)/);
+  assert.match(dialplan, /"\$\{AI_SIP_ENDPOINT\}" != "callsec-sip-\$\{AI_DID\}"/);
+  assert.doesNotMatch(dialplan, /Dial\(PJSIP\/novofon-endpoint/);
+  assert.match(pjsip, /^#include callsec-sip-lines[.]conf$/m);
   assert.doesNotMatch(pjsip + dialplan, /@@[A-Z_]+@@/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'callsec-metadata.json'), 'utf8')), {
     url: 'http://127.0.0.1:9020/call/start', token: example.metadataToken, dids: example.dids,
@@ -44,6 +51,18 @@ test('renderer refuses config injection and incomplete identity', () => {
     { sipHost: 'sip.example/invalid' }, { publicIp: 'not-an-ip' }]) {
     assert.throws(() => render({ ...example, ...override }, 'must-not-be-created'));
   }
+});
+
+test('legacy registration is retained by default and retired only by an explicit restoration flag', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'callsec-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  render({ ...example, legacyRegistrationEnabled: false }, directory);
+  const pjsip = fs.readFileSync(path.join(directory, 'pjsip.conf'), 'utf8');
+  assert.doesNotMatch(pjsip, /^\[novofon-registration\]$/m);
+  assert.match(pjsip, /^\[novofon-endpoint\]$/m);
+  assert.match(pjsip, /^\[novofon-auth\]$/m);
+  assert.match(pjsip, /^\[novofon-identify\]$/m);
+  assert.throws(() => render({ ...example, legacyRegistrationEnabled: 'false' }, directory), /must be boolean/);
 });
 
 test('UDP compatibility remains explicit and uses no TLS settings', (t) => {
@@ -80,6 +99,22 @@ test('DID identification accepts trunk aliases and rejects unconfigured numbers'
   assert.equal(findDid(['s', '<sip:+79952225212@example.org>'], example.dids), '79952225212');
   assert.equal(findDid(['caller799522252130'], example.dids), null);
   assert.equal(findDid(['79991112233'], example.dids), null);
+});
+
+test('dedicated incoming registrations bind their own DID without a DID SIP header', () => {
+  const route = {
+    endpoint: 'callsec-sip-79952225213', number: '+79952225213', server: 'sip.novofon.ru',
+    port: 5061, transport: 'tls', revision: '2026-11-21T12:00:00.000Z',
+  };
+  const input = {
+    channelEndpoint: route.endpoint, queuedEndpoint: '', didValues: ['new-sip-login'],
+    legacyDids: example.dids, routes: { '79952225213': route },
+  };
+  assert.deepEqual(selectSipBinding(input), { did: '79952225213', route });
+  assert.throws(() => selectSipBinding({ ...input, didValues: ['79952225212'] }), /does not match/);
+  assert.throws(() => selectSipBinding({ ...input, routes: {} }), /does not match/);
+  assert.throws(() => selectSipBinding({ ...input, channelEndpoint: 'novofon-endpoint', queuedEndpoint: route.endpoint }), /Unexpected outgoing/);
+  assert.equal(selectSipBinding({ ...input, channelEndpoint: 'novofon-endpoint', didValues: ['did_79952225212'] }).did, '79952225212');
 });
 
 test('metadata client authenticates JSON and fails closed for non-OK responses', async (t) => {

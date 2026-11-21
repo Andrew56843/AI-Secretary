@@ -43,6 +43,7 @@ done
 install -o root -g root -m 0755 "$DEPLOY_DIRECTORY/callsec-metadata.agi.cjs" /var/lib/asterisk/agi-bin/callsec-metadata.agi.cjs
 install -o root -g root -m 0440 "$DEPLOY_DIRECTORY/../voice/callsec-voice.sudoers" /etc/sudoers.d/callsec-voice
 install -o root -g root -m 0644 "$DEPLOY_DIRECTORY/../voice/callsec-voice.service" /etc/systemd/system/callsec-voice.service
+bash "$DEPLOY_DIRECTORY/install-sip-sync.sh"
 systemctl daemon-reload
 systemctl enable asterisk callsec-voice
 

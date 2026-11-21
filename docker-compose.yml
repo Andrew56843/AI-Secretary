@@ -39,6 +39,7 @@ services:
       TRUST_PROXY_HOPS: 0
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       VOICE_SERVICE_TOKEN: ${VOICE_SERVICE_TOKEN:-local-voice-service-token-change-me}
+      SIP_CONFIG_TOKEN: ${SIP_CONFIG_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_PROXY_URL: ${OPENAI_PROXY_URL:-}

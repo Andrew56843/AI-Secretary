@@ -14,7 +14,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:reset": "prisma migrate reset --force",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "sip:provision": "tsx src/scripts/provision-sip-lines.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
