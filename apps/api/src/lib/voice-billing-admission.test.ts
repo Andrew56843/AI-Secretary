@@ -22,8 +22,8 @@ test("HTTP admission snapshots billing before marking active and returns the sam
   const profile = {
     id: "profile-1", userId: "user-1", mode: CallDirection.INBOUND, status: ProfileStatus.ACTIVE,
     title: "Test profile", businessName: null, prompt: "", greetingText: "Test greeting",
-    voice: "marin", maxDialogSeconds: 120, greetingAudioCache: null, reservedNumber: number,
-    forwardingEnabled: false, forwardingOnComplete: false, forwardingOnStalemate: false, forwardingPhone: "",
+    voice: "marin", maxDialogSeconds: 1, greetingAudioCache: null, reservedNumber: number,
+    forwardingEnabled: true, forwardingOnComplete: true, forwardingOnStalemate: true, forwardingPhone: "+79990000001",
     user: {
       id: "user-1", phone: "+79990000001", timeZone: "Europe/Moscow", rubleBalanceKopecks: 10000,
       numberRentExpiresAt: new Date(Date.now() + 86400_000), googleAccount: null, telegramAccount: null
@@ -72,7 +72,10 @@ test("HTTP admission snapshots billing before marking active and returns the sam
 
   const first = await send();
   assert.equal(first.status, 200);
-  assert.equal(((await first.json()) as { profile: { realtimeModel: string } }).profile.realtimeModel, "gpt-realtime-2");
+  const firstProfile = ((await first.json()) as { profile: { realtimeModel: string; maxDialogSeconds: number; forwardAfterMs: number } }).profile;
+  assert.equal(firstProfile.realtimeModel, "gpt-realtime-2");
+  assert.equal(firstProfile.maxDialogSeconds, 1);
+  assert.equal(firstProfile.forwardAfterMs, 1000);
   assert.deepEqual(events, ["lock", "snapshot-read", "snapshot-create", "active-call"]);
   assert.equal((snapshot as CallBillingSnapshot | null)?.rateKopecksPerMinute, 1000);
 

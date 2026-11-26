@@ -242,7 +242,7 @@ function mapProfileToVoiceConfig(
     outboundSipLine?: OutboundSipLine | null;
   } = {}
 ) {
-  const maxDialogSeconds = Math.max(15, profile.maxDialogSeconds);
+  const maxDialogSeconds = Math.max(1, profile.maxDialogSeconds);
 
   return {
     assistantProfileId: profile.id,

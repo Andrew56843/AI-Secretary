@@ -1634,11 +1634,11 @@ export function DashboardPage({ token, user, onAuthorized, onLogout }: Dashboard
                     <input
                       className="range-control"
                       type="range"
-                      min={15}
+                      min={1}
                       max={600}
-                      step={15}
+                      step={1}
                       value={form.maxDialogSeconds}
-                      style={{ "--range-progress": `${((form.maxDialogSeconds - 15) / (600 - 15)) * 100}%` } as CSSProperties}
+                      style={{ "--range-progress": `${((form.maxDialogSeconds - 1) / (600 - 1)) * 100}%` } as CSSProperties}
                       onChange={(event) => setForm({ ...form, maxDialogSeconds: Number(event.target.value) })}
                     />
                   </label>

@@ -27,7 +27,7 @@ const updateProfileSchema = z.object({
   forwardingOnStalemate: z.boolean().optional(),
   realtimeModel: realtimeModelSchema.optional(),
   voice: voiceSchema.optional(),
-  maxDialogSeconds: z.number().int().min(15).max(600)
+  maxDialogSeconds: z.number().int().min(1).max(600)
 });
 
 const updateForwardingSchema = z.object({
