@@ -170,3 +170,51 @@ requires SRTP via in-SDP keys, configured by Asterisk's
 [`media_encryption=sdes`](https://docs.asterisk.org/Asterisk_20_Documentation/API_Documentation/Module_Configuration/res_pjsip/#media_encryption).
 `max_retries=0` disables retry attempts; this configuration uses a high explicit
 retry count and temporary handling of authentication rejection.
+## SIP Connection Health
+
+Install the SIP health service together with the matching voice code:
+
+```sh
+bash deploy/asterisk/install-sip-health.sh
+systemctl start callsec-sip-health.service
+journalctl -u callsec-sip-health.service --since '10 minutes ago'
+```
+
+The installer does not restart Asterisk or rotate SIP credentials. Preserve the
+existing `/etc/callsec` and Asterisk configuration before rollout. Install the
+root-owned publisher and sudoers before restarting the updated voice service.
+Wait for active calls and pending Asterisk call files to finish before that
+voice restart.
+
+The timer checks exact versioned registrations and their contacts every 20
+seconds. After 60 seconds of sustained registration failure it requests a soft
+re-registration, limited to once every two minutes per line. It never treats
+unknown CLI output or a failed status query as permission to reset a transport.
+
+After at least 120 seconds of confirmed unavailability across every dedicated
+line and the legacy contact, it can close only the stale IPv4 TLS sockets owned
+by the current Asterisk process. A fresh verified TLS 1.2 connection to Novofon
+must succeed first. All registrations must be known and not registered, every
+contact must be explicitly unavailable, and all Asterisk channels and outgoing
+spools must be empty. No Asterisk/server restart is performed. Recovery is
+limited to once every ten minutes and three attempts per hour. If these
+conditions are not satisfied, monitoring continues without a hard reset.
+
+SIP sync and recovery share the existing sync lock. Call publication takes a
+shared recovery lock; transport recovery takes it exclusively and rechecks
+channels, spools, and statuses before closing a socket. A recovery gate also
+stops new queue publication. Outbound preflight requires `Registered` and
+`Avail`; unavailable lines are deferred without consuming a call attempt.
+
+Health metadata is written to `/run/callsec-sip-health/status.json`; bounded
+recovery history is kept under `/var/lib/callsec-sip-health`. Logs contain no SIP
+passwords. Read-only diagnostics:
+
+```sh
+/usr/local/bin/node /usr/local/lib/callsec/deploy/asterisk/sip-health.cjs --check
+systemctl status callsec-sip-health.timer
+```
+
+This reduces recovery delay; it cannot prevent provider outages. It is not a
+replacement for provider-side inbound failover when the server is unreachable,
+nor for local fallback after an already-answered call loses its voice service.

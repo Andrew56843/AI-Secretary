@@ -1,0 +1,12 @@
+[Unit]
+Description=Monitor Callsec SIP connections every twenty seconds
+
+[Timer]
+OnBootSec=25s
+OnUnitInactiveSec=20s
+AccuracySec=1s
+RandomizedDelaySec=1s
+Unit=callsec-sip-health.service
+
+[Install]
+WantedBy=timers.target

@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
 const { performance } = require('node:perf_hooks');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const WebSocket = require('ws');
 
 const { HttpsProxyAgent } = require('https-proxy-agent');
@@ -30,6 +30,7 @@ const {
   normalizeDialPhone,
 } = require('./outbound-call');
 const { SIP_ROUTES_FILE, readSipRoutes, matchingSipRoute } = require('./deploy/asterisk/sip-routing.cjs');
+const { checkSipLineHealth, isSipRecoveryBlocked } = require('./sip-line-health');
 const { createCallTiming, getCompletedCallSeconds } = require('./call-timing');
 const { createDownsampler24kTo8k } = require('./audio-resampling');
 const { getDueFrameCount, getNextTickDelayMs } = require('./audio-playout');
@@ -1476,6 +1477,17 @@ function execCommand(command, timeoutMs = 15000) {
   });
 }
 
+function readAsteriskSipStatus(command) {
+  return new Promise((resolve, reject) => {
+    execFile('/usr/bin/sudo', ['-n', '/usr/sbin/asterisk', '-rx', command], {
+      timeout: 5000, maxBuffer: 1024 * 1024,
+    }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+
 async function requestPlatformOutboundJob() {
   if (!CONFIG.platformApiBaseUrl || !CONFIG.voiceServiceToken) return null;
   const response = await platformPostJson(
@@ -1522,7 +1534,8 @@ async function installOutboundCallFile(fileName, content) {
         `sudo /usr/bin/install -d -o asterisk -g asterisk -m 0750 ${shellQuote(CONFIG.asteriskOutgoingDir)} ${shellQuote(CONFIG.asteriskOutgoingStagingDir)}`
     );
     await execCommand(`sudo /usr/bin/install -o asterisk -g asterisk -m 0640 ${shellQuote(tmpPath)} ${shellQuote(stagingPath)}`);
-    await execCommand(`sudo /bin/mv -f ${shellQuote(stagingPath)} ${shellQuote(destPath)}`);
+    if (isSipRecoveryBlocked()) throw new Error('SIP recovery is in progress');
+    await execCommand(`sudo /usr/local/lib/callsec/publish-outbound-call.cjs ${shellQuote(stagingFileName)} ${shellQuote(fileName)}`);
     return destPath;
   } catch (err) {
     await execCommand(`sudo /bin/rm -f ${shellQuote(stagingPath)}`, 5000).catch(() => null);
@@ -1627,6 +1640,13 @@ async function outboundDialerTick() {
       if (!sipRoute) {
         logErr('[OUTBOUND]', `dedicated SIP route is not ready for contact=${job.id}`);
         await releasePlatformOutboundJobWithoutAttempt(job.id, 'dedicated SIP route is not ready');
+        continue;
+      }
+
+      const sipHealth = await checkSipLineHealth(sipRoute, { runAsterisk: readAsteriskSipStatus });
+      if (!sipHealth.ready) {
+        logErr('[OUTBOUND]', `dedicated SIP line is temporarily unavailable for contact=${job.id}; reason=${sipHealth.reason}`);
+        await releasePlatformOutboundJobWithoutAttempt(job.id, 'dedicated SIP line temporarily unavailable');
         continue;
       }
 
