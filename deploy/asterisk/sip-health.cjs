@@ -34,8 +34,10 @@ function parseTransportSnapshot(routes, registrations, contacts) {
     const registration = sipLineObjectNames(route).registration;
     const matches = registrationRows.filter(line => line.trim().startsWith(`${registration}/`));
     const status = matches.length === 1 ? matches[0].match(/\s(Registered|Rejected|Unregistered)\s+\(exp\./)?.[1] : null;
+    const matchingContacts = contactRows.filter((line, index) => contactAors[index] === `${route.endpoint}-aor`);
+    const contactStatus = matchingContacts.length === 1 ? matchingContacts[0].match(/\s(Avail|Unavail|NonQual|Unknown)\s+\S+\s*$/)?.[1] : null;
     const health = assessSipLineHealth(route, { registrations, contacts });
-    return { endpoint: route.endpoint, registration, status, ready: health.ready, reason: health.reason };
+    return { endpoint: route.endpoint, registration, status, contactStatus, ready: health.ready, reason: health.reason };
   });
   // Unknown registrations or contacts may belong to another user of the shared transport.
   const known = values.length > 0 && registrationRows.length === values.length && registrationCount === values.length &&
@@ -57,7 +59,7 @@ function planRecovery(snapshot, previous = {}, now = Date.now(), policy = POLICY
     const failureSince = line.ready ? null : Number.isFinite(old?.failureSince) ? old.failureSince : now;
     const lastSoftAt = Number.isFinite(old?.lastSoftAt) ? old.lastSoftAt : null;
     state.lines[line.registration] = { failureSince, lastSoftAt };
-    if (line.status && line.status !== 'Registered' && failureSince !== null && now - failureSince >= policy.softAfterMs &&
+    if (line.status && !line.ready && (line.status !== 'Registered' || line.contactStatus === 'Unavail') && failureSince !== null && now - failureSince >= policy.softAfterMs &&
         (lastSoftAt === null || now - lastSoftAt >= policy.softCooldownMs)) soft.push(line.registration);
   }
   const lastReset = state.resets.length ? Math.max(...state.resets) : null;
@@ -229,7 +231,7 @@ async function run(mode) {
   }
   for (const registration of planned.soft) {
     const fresh = snapshot().lines.find(line => line.registration === registration);
-    if (!fresh?.status || fresh.status === 'Registered') continue;
+    if (!fresh?.status || fresh.ready || (fresh.status === 'Registered' && (fresh.contactStatus !== 'Unavail' || !quiescent()))) continue;
     planned.state.lines[registration].lastSoftAt = Date.now();
     atomicWrite(STATE_FILE, planned.state);
     asterisk(`pjsip send register ${registration}`);

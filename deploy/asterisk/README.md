@@ -187,8 +187,11 @@ Wait for active calls and pending Asterisk call files to finish before that
 voice restart.
 
 The timer checks exact versioned registrations and their contacts every 20
-seconds. After 60 seconds of sustained registration failure it requests a soft
-re-registration, limited to once every two minutes per line. It never treats
+seconds. After 60 seconds of sustained registration or contact failure it requests a soft
+re-registration, limited to once every two minutes per line. A registered line
+with an explicitly unavailable contact is retried without waiting for its
+registration to expire, but only when channels and outgoing spools are empty.
+It never treats
 unknown CLI output or a failed status query as permission to reset a transport.
 
 After at least 120 seconds of confirmed unavailability across every dedicated

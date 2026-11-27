@@ -117,6 +117,38 @@ test('soft actions obey their per-line cooldown', () => {
   const s = snapshotOf();
   assert.equal(planRecovery(s, previous(s), NOW).soft.length, 0);
 });
+test('a long-lived Registered identity with an explicitly unavailable contact still receives soft recovery', () => {
+  const f = fixture({ statuses: ['Registered', 'Registered'], contacts: ['Unavail', 'Unavail'] });
+  const s = parseTransportSnapshot(routes, f.registrations.replaceAll('(exp. 52s)', '(exp. 3600s)'), f.contacts);
+  const old = previous(s);
+  for (const line of Object.values(old.lines)) line.lastSoftAt = null;
+  assert.equal(s.lines.every(line => line.contactStatus === 'Unavail'), true);
+  assert.equal(s.allUnavailable, false);
+  const plan = planRecovery(s, old, NOW);
+  assert.equal(plan.soft.length, 2);
+  assert.equal(plan.hard, false);
+});
+test('a Registered identity with an unknown, nonqualified or missing contact never triggers forced registration', () => {
+  for (const contact of ['Unknown', 'NonQual']) {
+    const s = snapshotOf({ statuses: ['Registered', 'Registered'], contacts: [contact, contact] });
+    const old = previous(s);
+    for (const line of Object.values(old.lines)) line.lastSoftAt = null;
+    assert.deepEqual(planRecovery(s, old, NOW).soft, []);
+  }
+  const f = fixture({ statuses: ['Registered', 'Registered'] });
+  const s = parseTransportSnapshot(routes, f.registrations, 'Objects found: 0\n');
+  const old = previous(s);
+  for (const line of Object.values(old.lines)) line.lastSoftAt = null;
+  assert.deepEqual(planRecovery(s, old, NOW).soft, []);
+});
+test('a healthy Registered identity never receives soft recovery despite an old persisted failure streak', () => {
+  const s = snapshotOf({ statuses: ['Registered', 'Registered'], contacts: ['Avail', 'Avail'] });
+  const old = previous(s);
+  for (const line of Object.values(old.lines)) line.lastSoftAt = null;
+  const plan = planRecovery(s, old, NOW);
+  assert.deepEqual(plan.soft, []);
+  assert.equal(plan.hard, false);
+});
 test('a delayed watchdog tick does not perform soft and hard recovery together', () => {
   const s = snapshotOf();
   const old = previous(s);
